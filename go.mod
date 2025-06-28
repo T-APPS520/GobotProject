@@ -10,4 +10,5 @@ require (
 	github.com/nsf/termbox-go v1.1.1 // indirect
 	github.com/rivo/uniseg v0.4.7 // indirect
 	gobot.io/x/gobot v1.16.0 // indirect
+	gocv.io/x/gocv v0.41.0 // indirect
 )
