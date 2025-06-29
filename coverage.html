@@ -1,0 +1,553 @@
+
+<!DOCTYPE html>
+<html>
+	<head>
+		<meta http-equiv="Content-Type" content="text/html; charset=utf-8">
+		<title>GobotProject: Go Coverage Report</title>
+		<style>
+			body {
+				background: black;
+				color: rgb(80, 80, 80);
+			}
+			body, pre, #legend span {
+				font-family: Menlo, monospace;
+				font-weight: bold;
+			}
+			#topbar {
+				background: black;
+				position: fixed;
+				top: 0; left: 0; right: 0;
+				height: 42px;
+				border-bottom: 1px solid rgb(80, 80, 80);
+			}
+			#content {
+				margin-top: 50px;
+			}
+			#nav, #legend {
+				float: left;
+				margin-left: 10px;
+			}
+			#legend {
+				margin-top: 12px;
+			}
+			#nav {
+				margin-top: 10px;
+			}
+			#legend span {
+				margin: 0 5px;
+			}
+			.cov0 { color: rgb(192, 0, 0) }
+.cov1 { color: rgb(128, 128, 128) }
+.cov2 { color: rgb(116, 140, 131) }
+.cov3 { color: rgb(104, 152, 134) }
+.cov4 { color: rgb(92, 164, 137) }
+.cov5 { color: rgb(80, 176, 140) }
+.cov6 { color: rgb(68, 188, 143) }
+.cov7 { color: rgb(56, 200, 146) }
+.cov8 { color: rgb(44, 212, 149) }
+.cov9 { color: rgb(32, 224, 152) }
+.cov10 { color: rgb(20, 236, 155) }
+
+		</style>
+	</head>
+	<body>
+		<div id="topbar">
+			<div id="nav">
+				<select id="files">
+				
+				<option value="file0">GobotProject/camera_viewer.go (54.8%)</option>
+				
+				<option value="file1">GobotProject/drone_controller.go (27.5%)</option>
+				
+				<option value="file2">GobotProject/keyboard_handler.go (10.5%)</option>
+				
+				<option value="file3">GobotProject/main.go (0.0%)</option>
+				
+				</select>
+			</div>
+			<div id="legend">
+				<span>not tracked</span>
+			
+				<span class="cov0">not covered</span>
+				<span class="cov8">covered</span>
+			
+			</div>
+		</div>
+		<div id="content">
+		
+		<pre class="file" id="file0" style="display: none">package main
+
+import (
+        "fmt"
+        "log"
+        "os"
+        "time"
+
+        "gobot.io/x/gobot/platforms/dji/tello"
+)
+
+// CameraViewer はドローンのカメラ画像を表示するクラス
+type CameraViewer struct {
+        drone       *tello.Driver
+        isRunning   bool
+        isRecording bool
+        frameCount  int
+        recordFile  *os.File
+}
+
+// NewCameraViewer は新しいカメラビューワーを作成
+func NewCameraViewer(drone *tello.Driver) *CameraViewer <span class="cov8" title="1">{
+        return &amp;CameraViewer{
+                drone:       drone,
+                isRunning:   false,
+                isRecording: false,
+                frameCount:  0,
+        }
+}</span>
+
+// Start はカメラビューワーを開始
+func (cv *CameraViewer) Start() <span class="cov0" title="0">{
+        cv.isRunning = true
+        
+        // ビデオストリームを開始
+        cv.drone.StartVideo()
+        cv.drone.SetVideoEncoderRate(tello.VideoBitRateAuto)
+        cv.drone.SetExposure(0)
+
+        // ビデオフレームイベントを登録
+        cv.drone.On(tello.VideoFrameEvent, func(data interface{}) </span><span class="cov0" title="0">{
+                if frameData, ok := data.([]byte); ok </span><span class="cov0" title="0">{
+                        cv.processFrame(frameData)
+                }</span>
+        })
+
+        <span class="cov0" title="0">fmt.Println("カメラビューワー開始 - ビデオストリーム受信中...")</span>
+}
+
+// Stop はカメラビューワーを停止
+func (cv *CameraViewer) Stop() <span class="cov0" title="0">{
+        cv.isRunning = false
+        
+        if cv.isRecording </span><span class="cov0" title="0">{
+                cv.StopRecording()
+        }</span>
+        
+        <span class="cov0" title="0">fmt.Println("カメラビューワー停止")</span>
+}
+
+// processFrame はフレームを処理
+func (cv *CameraViewer) processFrame(frameData []byte) <span class="cov8" title="1">{
+        if !cv.isRunning </span><span class="cov8" title="1">{
+                return
+        }</span>
+
+        <span class="cov0" title="0">cv.frameCount++
+        
+        // フレーム受信の確認（5秒ごと）
+        if cv.frameCount%150 == 0 </span><span class="cov0" title="0">{ // 約30FPS * 5秒
+                fmt.Printf("フレーム受信中... (フレーム数: %d)\n", cv.frameCount)
+        }</span>
+
+        // 録画中の場合、フレームデータを保存
+        <span class="cov0" title="0">if cv.isRecording &amp;&amp; cv.recordFile != nil </span><span class="cov0" title="0">{
+                cv.recordFile.Write(frameData)
+        }</span>
+}
+
+// StartRecording は録画を開始
+func (cv *CameraViewer) StartRecording() <span class="cov8" title="1">{
+        if cv.isRecording </span><span class="cov8" title="1">{
+                return
+        }</span>
+
+        // 現在の時刻でファイル名を生成
+        <span class="cov8" title="1">filename := fmt.Sprintf("tello_recording_%s.h264", time.Now().Format("20060102_150405"))
+        
+        // ファイルを作成
+        file, err := os.Create(filename)
+        if err != nil </span><span class="cov0" title="0">{
+                log.Printf("録画ファイルの作成に失敗: %v", err)
+                return
+        }</span>
+
+        <span class="cov8" title="1">cv.recordFile = file
+        cv.isRecording = true
+        fmt.Printf("録画開始: %s\n", filename)</span>
+}
+
+// StopRecording は録画を停止
+func (cv *CameraViewer) StopRecording() <span class="cov8" title="1">{
+        if !cv.isRecording </span><span class="cov8" title="1">{
+                return
+        }</span>
+
+        <span class="cov8" title="1">if cv.recordFile != nil </span><span class="cov8" title="1">{
+                cv.recordFile.Close()
+                cv.recordFile = nil
+        }</span>
+
+        <span class="cov8" title="1">cv.isRecording = false
+        fmt.Println("録画停止")</span>
+}
+
+// ToggleRecording は録画のオン/オフを切り替える
+func (cv *CameraViewer) ToggleRecording() <span class="cov8" title="1">{
+        if cv.isRecording </span><span class="cov8" title="1">{
+                cv.StopRecording()
+        }</span> else<span class="cov8" title="1"> {
+                cv.StartRecording()
+        }</span>
+}
+
+// IsRecording は録画中かどうかを返す
+func (cv *CameraViewer) IsRecording() bool <span class="cov8" title="1">{
+        return cv.isRecording
+}</span>
+
+// IsRunning は実行中かどうかを返す
+func (cv *CameraViewer) IsRunning() bool <span class="cov8" title="1">{
+        return cv.isRunning
+}</span>
+</pre>
+		
+		<pre class="file" id="file1" style="display: none">package main
+
+import (
+        "fmt"
+        "gobot.io/x/gobot/platforms/dji/tello"
+)
+
+// DroneController はTelloドローンを制御するクラス
+type DroneController struct {
+        drone      *tello.Driver
+        isFlying   bool
+        isRecording bool
+}
+
+// NewDroneController は新しいドローンコントローラーを作成
+func NewDroneController() *DroneController <span class="cov8" title="1">{
+        drone := tello.NewDriver("8888")
+        return &amp;DroneController{
+                drone:      drone,
+                isFlying:   false,
+                isRecording: false,
+        }
+}</span>
+
+// GetDriver はドローンドライバーを返す
+func (dc *DroneController) GetDriver() *tello.Driver <span class="cov8" title="1">{
+        return dc.drone
+}</span>
+
+// TakeOffOrLand は離陸または着陸を制御
+func (dc *DroneController) TakeOffOrLand() <span class="cov0" title="0">{
+        if dc.isFlying </span><span class="cov0" title="0">{
+                dc.Land()
+        }</span> else<span class="cov0" title="0"> {
+                dc.TakeOff()
+        }</span>
+}
+
+// TakeOff はドローンを離陸させる
+func (dc *DroneController) TakeOff() <span class="cov0" title="0">{
+        fmt.Println("ドローンが離陸します...")
+        dc.drone.TakeOff()
+        dc.isFlying = true
+}</span>
+
+// Land はドローンを着陸させる
+func (dc *DroneController) Land() <span class="cov0" title="0">{
+        fmt.Println("ドローンが着陸します...")
+        dc.drone.Land()
+        dc.isFlying = false
+}</span>
+
+// MoveForward はドローンを前進させる
+func (dc *DroneController) MoveForward() <span class="cov8" title="1">{
+        if dc.isFlying </span><span class="cov0" title="0">{
+                fmt.Println("前進")
+                dc.drone.Forward(20)
+        }</span>
+}
+
+// MoveBackward はドローンを後退させる
+func (dc *DroneController) MoveBackward() <span class="cov8" title="1">{
+        if dc.isFlying </span><span class="cov0" title="0">{
+                fmt.Println("後退")
+                dc.drone.Backward(20)
+        }</span>
+}
+
+// MoveLeft はドローンを左に移動させる
+func (dc *DroneController) MoveLeft() <span class="cov8" title="1">{
+        if dc.isFlying </span><span class="cov0" title="0">{
+                fmt.Println("左移動")
+                dc.drone.Left(20)
+        }</span>
+}
+
+// MoveRight はドローンを右に移動させる
+func (dc *DroneController) MoveRight() <span class="cov8" title="1">{
+        if dc.isFlying </span><span class="cov0" title="0">{
+                fmt.Println("右移動")
+                dc.drone.Right(20)
+        }</span>
+}
+
+// MoveUp はドローンを上昇させる
+func (dc *DroneController) MoveUp() <span class="cov8" title="1">{
+        if dc.isFlying </span><span class="cov0" title="0">{
+                fmt.Println("上昇")
+                dc.drone.Up(20)
+        }</span>
+}
+
+// MoveDown はドローンを降下させる
+func (dc *DroneController) MoveDown() <span class="cov8" title="1">{
+        if dc.isFlying </span><span class="cov0" title="0">{
+                fmt.Println("降下")
+                dc.drone.Down(20)
+        }</span>
+}
+
+// ToggleRecording は録画のオン/オフを切り替える
+func (dc *DroneController) ToggleRecording() <span class="cov0" title="0">{
+        if dc.isRecording </span><span class="cov0" title="0">{
+                dc.StopRecording()
+        }</span> else<span class="cov0" title="0"> {
+                dc.StartRecording()
+        }</span>
+}
+
+// StartRecording は録画を開始（ビデオストリーム）
+func (dc *DroneController) StartRecording() <span class="cov0" title="0">{
+        fmt.Println("録画開始")
+        dc.drone.StartVideo()
+        dc.isRecording = true
+}</span>
+
+// StopRecording は録画を停止
+func (dc *DroneController) StopRecording() <span class="cov0" title="0">{
+        fmt.Println("録画停止")
+        // ビデオストリームは手動で停止しない（カメラビューワー側で制御）
+        dc.isRecording = false
+}</span>
+
+// IsFlying はドローンが飛行中かどうかを返す
+func (dc *DroneController) IsFlying() bool <span class="cov8" title="1">{
+        return dc.isFlying
+}</span>
+
+// IsRecording はドローンが録画中かどうかを返す
+func (dc *DroneController) IsRecording() bool <span class="cov8" title="1">{
+        return dc.isRecording
+}</span>
+</pre>
+		
+		<pre class="file" id="file2" style="display: none">package main
+
+import (
+        "fmt"
+        "os"
+
+        "github.com/nsf/termbox-go"
+)
+
+// KeyboardHandler はキーボード入力を処理するクラス
+type KeyboardHandler struct {
+        droneController *DroneController
+        cameraViewer    *CameraViewer
+        isRunning       bool
+}
+
+// NewKeyboardHandler は新しいキーボードハンドラーを作成
+func NewKeyboardHandler(droneController *DroneController, cameraViewer *CameraViewer) *KeyboardHandler <span class="cov8" title="1">{
+        return &amp;KeyboardHandler{
+                droneController: droneController,
+                cameraViewer:    cameraViewer,
+                isRunning:       false,
+        }
+}</span>
+
+// Start はキーボードハンドラーを開始
+func (kh *KeyboardHandler) Start() error <span class="cov0" title="0">{
+        err := termbox.Init()
+        if err != nil </span><span class="cov0" title="0">{
+                return err
+        }</span>
+
+        <span class="cov0" title="0">kh.isRunning = true
+        fmt.Println("キーボードコントロール開始:")
+        fmt.Println("W/A/S/D: 前進/左/後退/右")
+        fmt.Println("Space: 上昇")
+        fmt.Println("Z: 降下")
+        fmt.Println("Escape: 離陸/着陸")
+        fmt.Println("L: 録画 開始/停止")
+        fmt.Println("Q: 終了")
+
+        go kh.handleKeyboard()
+        return nil</span>
+}
+
+// Stop はキーボードハンドラーを停止
+func (kh *KeyboardHandler) Stop() <span class="cov8" title="1">{
+        kh.isRunning = false
+        termbox.Close()
+}</span>
+
+// handleKeyboard はキーボード入力を処理
+func (kh *KeyboardHandler) handleKeyboard() <span class="cov0" title="0">{
+        for kh.isRunning </span><span class="cov0" title="0">{
+                switch ev := termbox.PollEvent(); ev.Type </span>{
+                case termbox.EventKey:<span class="cov0" title="0">
+                        kh.processKey(ev)</span>
+                case termbox.EventError:<span class="cov0" title="0">
+                        panic(ev.Err)</span>
+                }
+        }
+}
+
+// processKey はキー入力を処理
+func (kh *KeyboardHandler) processKey(ev termbox.Event) <span class="cov0" title="0">{
+        switch ev.Key </span>{
+        case termbox.KeyEsc:<span class="cov0" title="0">
+                // Escapeキー: 離陸/着陸
+                kh.droneController.TakeOffOrLand()</span>
+                
+        case termbox.KeySpace:<span class="cov0" title="0">
+                // スペースキー: 上昇
+                kh.droneController.MoveUp()</span>
+                
+        case termbox.KeyCtrlC:<span class="cov0" title="0">
+                // Ctrl+C: 終了
+                fmt.Println("\nプログラムを終了します...")
+                kh.Stop()
+                os.Exit(0)</span>
+        }
+
+        // 通常のキー入力
+        <span class="cov0" title="0">switch ev.Ch </span>{
+        case 'w', 'W':<span class="cov0" title="0">
+                // W: 前進
+                kh.droneController.MoveForward()</span>
+                
+        case 's', 'S':<span class="cov0" title="0">
+                // S: 後退
+                kh.droneController.MoveBackward()</span>
+                
+        case 'a', 'A':<span class="cov0" title="0">
+                // A: 左移動
+                kh.droneController.MoveLeft()</span>
+                
+        case 'd', 'D':<span class="cov0" title="0">
+                // D: 右移動
+                kh.droneController.MoveRight()</span>
+                
+        case 'l', 'L':<span class="cov0" title="0">
+                // L: 録画切り替え
+                if kh.cameraViewer != nil </span><span class="cov0" title="0">{
+                        kh.cameraViewer.ToggleRecording()
+                }</span>
+                
+        case 'q', 'Q':<span class="cov0" title="0">
+                // Q: 終了
+                fmt.Println("\nプログラムを終了します...")
+                kh.Stop()
+                os.Exit(0)</span>
+                
+        case 'z', 'Z':<span class="cov0" title="0">
+                // Z: 降下（Shiftキーの代替）
+                kh.droneController.MoveDown()</span>
+        }
+}
+
+// IsRunning は実行中かどうかを返す
+func (kh *KeyboardHandler) IsRunning() bool <span class="cov8" title="1">{
+        return kh.isRunning
+}</span>
+</pre>
+		
+		<pre class="file" id="file3" style="display: none">package main
+
+import (
+        "fmt"
+        "time"
+
+        "gobot.io/x/gobot"
+)
+
+func main() <span class="cov0" title="0">{
+        // ドローンコントローラーを作成
+        droneController := NewDroneController()
+        
+        // カメラビューワーを作成
+        cameraViewer := NewCameraViewer(droneController.GetDriver())
+        
+        // キーボードハンドラーを作成
+        keyboardHandler := NewKeyboardHandler(droneController, cameraViewer)
+
+        // ドローンの動作を定義する関数
+        work := func() </span><span class="cov0" title="0">{
+                // カメラビューワーを開始
+                cameraViewer.Start()
+                
+                // キーボードハンドラーを開始
+                err := keyboardHandler.Start()
+                if err != nil </span><span class="cov0" title="0">{
+                        fmt.Printf("キーボードハンドラーの開始に失敗: %v\n", err)
+                        return
+                }</span>
+
+                // プログラムの説明を表示
+                <span class="cov0" title="0">fmt.Println("=== Tello ドローンコントローラー ===")
+                fmt.Println("ドローンに接続中...")
+                
+                // 接続確認のため少し待機
+                time.Sleep(2 * time.Second)
+                fmt.Println("準備完了！")</span>
+        }
+
+        // ロボットを作成し、ドローンデバイスを設定
+        <span class="cov0" title="0">robot := gobot.NewRobot(
+                []gobot.Connection{},
+                []gobot.Device{droneController.GetDriver()},
+                work,
+        )
+
+        // ロボットを開始し、エラーがあれば表示
+        err := robot.Start()
+        if err != nil </span><span class="cov0" title="0">{
+                fmt.Println("Error starting robot:", err)
+        }</span>
+}</pre>
+		
+		</div>
+	</body>
+	<script>
+	(function() {
+		var files = document.getElementById('files');
+		var visible;
+		files.addEventListener('change', onChange, false);
+		function select(part) {
+			if (visible)
+				visible.style.display = 'none';
+			visible = document.getElementById(part);
+			if (!visible)
+				return;
+			files.value = part;
+			visible.style.display = 'block';
+			location.hash = part;
+		}
+		function onChange() {
+			select(files.value);
+			window.scrollTo(0, 0);
+		}
+		if (location.hash != "") {
+			select(location.hash.substr(1));
+		}
+		if (!visible) {
+			select("file0");
+		}
+	})();
+	</script>
+</html>
