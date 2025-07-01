@@ -2,6 +2,7 @@ package main
 
 import (
 	"fmt"
+	"log"
 	"time"
 
 	"gobot.io/x/gobot"
@@ -9,7 +10,7 @@ import (
 
 // waitForConnection 接続確認を行い、タイムアウト付きで待機
 func waitForConnection(droneController *DroneController, maxWaitTime time.Duration) error {
-	fmt.Println("ドローンに接続中...")
+	log.Println("ドローンに接続中...")
 	
 	// シンプルな接続確認（実際の実装では、ドローンの状態を確認）
 	startTime := time.Now()
@@ -24,7 +25,7 @@ func waitForConnection(droneController *DroneController, maxWaitTime time.Durati
 		case <-ticker.C:
 			// 実際の接続確認ロジック（ここでは簡略化）
 			if time.Since(startTime) >= time.Second {
-				fmt.Println("準備完了！")
+				log.Println("準備完了！")
 				return nil
 			}
 		case <-timeout:
@@ -51,17 +52,17 @@ func main() {
 		// キーボードハンドラーを開始
 		err := keyboardHandler.Start()
 		if err != nil {
-			fmt.Printf("キーボードハンドラーの開始に失敗: %v\n", err)
+			log.Printf("キーボードハンドラーの開始に失敗: %v", err)
 			return
 		}
 
 		// プログラムの説明を表示
-		fmt.Println("=== Tello ドローンコントローラー ===")
+		log.Println("=== Tello ドローンコントローラー ===")
 		
 		// 接続確認のため少し待機
 		err = waitForConnection(droneController, 10*time.Second)
 		if err != nil {
-			fmt.Println("Error:", err)
+			log.Printf("接続エラー: %v", err)
 			return
 		}
 	}
@@ -76,6 +77,6 @@ func main() {
 	// ロボットを開始し、エラーがあれば表示
 	err := robot.Start()
 	if err != nil {
-		fmt.Println("Error starting robot:", err)
+		log.Printf("ロボット開始エラー: %v", err)
 	}
 }
