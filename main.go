@@ -16,6 +16,9 @@ func waitForConnection(droneController *DroneController, maxWaitTime time.Durati
 	ticker := time.NewTicker(100 * time.Millisecond)
 	defer ticker.Stop()
 	
+	// タイムアウトタイマーをループ外で設定
+	timeout := time.After(maxWaitTime)
+	
 	for {
 		select {
 		case <-ticker.C:
@@ -24,7 +27,7 @@ func waitForConnection(droneController *DroneController, maxWaitTime time.Durati
 				fmt.Println("準備完了！")
 				return nil
 			}
-		case <-time.After(maxWaitTime):
+		case <-timeout:
 			return fmt.Errorf("接続タイムアウト: %v", maxWaitTime)
 		}
 	}
