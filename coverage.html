@@ -55,11 +55,11 @@
 			<div id="nav">
 				<select id="files">
 				
-				<option value="file0">GobotProject/camera_viewer.go (54.8%)</option>
+				<option value="file0">GobotProject/camera_viewer.go (66.7%)</option>
 				
-				<option value="file1">GobotProject/drone_controller.go (27.5%)</option>
+				<option value="file1">GobotProject/drone_controller.go (42.5%)</option>
 				
-				<option value="file2">GobotProject/keyboard_handler.go (10.5%)</option>
+				<option value="file2">GobotProject/keyboard_handler.go (45.8%)</option>
 				
 				<option value="file3">GobotProject/main.go (0.0%)</option>
 				
@@ -106,7 +106,7 @@ func NewCameraViewer(drone *tello.Driver) *CameraViewer <span class="cov8" title
 }</span>
 
 // Start はカメラビューワーを開始
-func (cv *CameraViewer) Start() <span class="cov0" title="0">{
+func (cv *CameraViewer) Start() <span class="cov8" title="1">{
         cv.isRunning = true
         
         // ビデオストリームを開始
@@ -249,7 +249,7 @@ func (dc *DroneController) TakeOffOrLand() <span class="cov0" title="0">{
 }
 
 // TakeOff はドローンを離陸させる
-func (dc *DroneController) TakeOff() <span class="cov0" title="0">{
+func (dc *DroneController) TakeOff() <span class="cov8" title="1">{
         fmt.Println("ドローンが離陸します...")
         dc.drone.TakeOff()
         dc.isFlying = true
@@ -320,7 +320,7 @@ func (dc *DroneController) ToggleRecording() <span class="cov0" title="0">{
 }
 
 // StartRecording は録画を開始（ビデオストリーム）
-func (dc *DroneController) StartRecording() <span class="cov0" title="0">{
+func (dc *DroneController) StartRecording() <span class="cov8" title="1">{
         fmt.Println("録画開始")
         dc.drone.StartVideo()
         dc.isRecording = true
@@ -348,7 +348,10 @@ func (dc *DroneController) IsRecording() bool <span class="cov8" title="1">{
 
 import (
         "fmt"
+        "log"
         "os"
+        "os/signal"
+        "syscall"
 
         "github.com/nsf/termbox-go"
 )
@@ -358,6 +361,7 @@ type KeyboardHandler struct {
         droneController *DroneController
         cameraViewer    *CameraViewer
         isRunning       bool
+        shutdownCallback func() // 終了時のコールバック関数
 }
 
 // NewKeyboardHandler は新しいキーボードハンドラーを作成
@@ -366,17 +370,29 @@ func NewKeyboardHandler(droneController *DroneController, cameraViewer *CameraVi
                 droneController: droneController,
                 cameraViewer:    cameraViewer,
                 isRunning:       false,
+                shutdownCallback: func() </span><span class="cov0" title="0">{ os.Exit(1) }</span>, // デフォルトの終了処理
         }
-}</span>
+}
+
+// SetShutdownCallback はカスタムシャットダウンコールバックを設定
+func (kh *KeyboardHandler) SetShutdownCallback(callback func()) <span class="cov8" title="1">{
+        if callback != nil </span><span class="cov8" title="1">{
+                kh.shutdownCallback = callback
+        }</span>
+}
 
 // Start はキーボードハンドラーを開始
-func (kh *KeyboardHandler) Start() error <span class="cov0" title="0">{
+func (kh *KeyboardHandler) Start() error <span class="cov8" title="1">{
         err := termbox.Init()
         if err != nil </span><span class="cov0" title="0">{
                 return err
         }</span>
 
-        <span class="cov0" title="0">kh.isRunning = true
+        <span class="cov8" title="1">kh.isRunning = true
+
+        // シグナルハンドリングを設定
+        kh.setupSignalHandling()
+
         fmt.Println("キーボードコントロール開始:")
         fmt.Println("W/A/S/D: 前進/左/後退/右")
         fmt.Println("Space: 上昇")
@@ -389,6 +405,18 @@ func (kh *KeyboardHandler) Start() error <span class="cov0" title="0">{
         return nil</span>
 }
 
+// setupSignalHandling はシグナルハンドリングを設定
+func (kh *KeyboardHandler) setupSignalHandling() <span class="cov8" title="1">{
+        c := make(chan os.Signal, 1)
+        signal.Notify(c, os.Interrupt, syscall.SIGTERM)
+
+        go func() </span><span class="cov8" title="1">{
+                &lt;-c
+                log.Println("シグナルを受信しました。グレースフルシャットダウンを実行します...")
+                kh.gracefulShutdown()
+        }</span>()
+}
+
 // Stop はキーボードハンドラーを停止
 func (kh *KeyboardHandler) Stop() <span class="cov8" title="1">{
         kh.isRunning = false
@@ -396,13 +424,17 @@ func (kh *KeyboardHandler) Stop() <span class="cov8" title="1">{
 }</span>
 
 // handleKeyboard はキーボード入力を処理
-func (kh *KeyboardHandler) handleKeyboard() <span class="cov0" title="0">{
-        for kh.isRunning </span><span class="cov0" title="0">{
+func (kh *KeyboardHandler) handleKeyboard() <span class="cov8" title="1">{
+        for kh.isRunning </span><span class="cov8" title="1">{
                 switch ev := termbox.PollEvent(); ev.Type </span>{
                 case termbox.EventKey:<span class="cov0" title="0">
                         kh.processKey(ev)</span>
                 case termbox.EventError:<span class="cov0" title="0">
-                        panic(ev.Err)</span>
+                        // エラーをログに出力し、グレースフルシャットダウン
+                        log.Printf("Termboxイベントエラー: %v", ev.Err)
+                        fmt.Println("\nキーボードイベントエラーが発生しました。プログラムを終了します...")
+                        kh.gracefulShutdown()
+                        return</span>
                 }
         }
 }
@@ -413,16 +445,15 @@ func (kh *KeyboardHandler) processKey(ev termbox.Event) <span class="cov0" title
         case termbox.KeyEsc:<span class="cov0" title="0">
                 // Escapeキー: 離陸/着陸
                 kh.droneController.TakeOffOrLand()</span>
-                
+
         case termbox.KeySpace:<span class="cov0" title="0">
                 // スペースキー: 上昇
                 kh.droneController.MoveUp()</span>
-                
+
         case termbox.KeyCtrlC:<span class="cov0" title="0">
                 // Ctrl+C: 終了
                 fmt.Println("\nプログラムを終了します...")
-                kh.Stop()
-                os.Exit(0)</span>
+                kh.gracefulShutdown()</span>
         }
 
         // 通常のキー入力
@@ -430,35 +461,59 @@ func (kh *KeyboardHandler) processKey(ev termbox.Event) <span class="cov0" title
         case 'w', 'W':<span class="cov0" title="0">
                 // W: 前進
                 kh.droneController.MoveForward()</span>
-                
+
         case 's', 'S':<span class="cov0" title="0">
                 // S: 後退
                 kh.droneController.MoveBackward()</span>
-                
+
         case 'a', 'A':<span class="cov0" title="0">
                 // A: 左移動
                 kh.droneController.MoveLeft()</span>
-                
+
         case 'd', 'D':<span class="cov0" title="0">
                 // D: 右移動
                 kh.droneController.MoveRight()</span>
-                
+
         case 'l', 'L':<span class="cov0" title="0">
                 // L: 録画切り替え
                 if kh.cameraViewer != nil </span><span class="cov0" title="0">{
                         kh.cameraViewer.ToggleRecording()
                 }</span>
-                
+
         case 'q', 'Q':<span class="cov0" title="0">
                 // Q: 終了
                 fmt.Println("\nプログラムを終了します...")
-                kh.Stop()
-                os.Exit(0)</span>
-                
+                kh.gracefulShutdown()</span>
+
         case 'z', 'Z':<span class="cov0" title="0">
                 // Z: 降下（Shiftキーの代替）
                 kh.droneController.MoveDown()</span>
         }
+}
+
+// gracefulShutdown はリソースを適切にクリーンアップしてプログラムを終了
+func (kh *KeyboardHandler) gracefulShutdown() <span class="cov0" title="0">{
+        log.Println("グレースフルシャットダウンを実行中...")
+
+        // キーボードハンドラーを停止
+        kh.Stop()
+
+        // ドローンを着陸させる
+        if kh.droneController != nil </span><span class="cov0" title="0">{
+                log.Println("ドローンを緊急着陸させています...")
+                kh.droneController.Land()
+        }</span>
+
+        // カメラビューワーを停止
+        <span class="cov0" title="0">if kh.cameraViewer != nil </span><span class="cov0" title="0">{
+                log.Println("カメラビューワーを停止中...")
+                kh.cameraViewer.Stop()
+        }</span>
+
+        // 設定されたシャットダウンコールバックを実行
+        <span class="cov0" title="0">if kh.shutdownCallback != nil </span><span class="cov0" title="0">{
+                kh.shutdownCallback()
+        }</span>
 }
 
 // IsRunning は実行中かどうかを返す
@@ -475,6 +530,29 @@ import (
 
         "gobot.io/x/gobot"
 )
+
+// waitForConnection 接続確認を行い、タイムアウト付きで待機
+func waitForConnection(droneController *DroneController, maxWaitTime time.Duration) error <span class="cov0" title="0">{
+        fmt.Println("ドローンに接続中...")
+        
+        // シンプルな接続確認（実際の実装では、ドローンの状態を確認）
+        startTime := time.Now()
+        ticker := time.NewTicker(100 * time.Millisecond)
+        defer ticker.Stop()
+        
+        for </span><span class="cov0" title="0">{
+                select </span>{
+                case &lt;-ticker.C:<span class="cov0" title="0">
+                        // 実際の接続確認ロジック（ここでは簡略化）
+                        if time.Since(startTime) &gt;= time.Second </span><span class="cov0" title="0">{
+                                fmt.Println("準備完了！")
+                                return nil
+                        }</span>
+                case &lt;-time.After(maxWaitTime):<span class="cov0" title="0">
+                        return fmt.Errorf("接続タイムアウト: %v", maxWaitTime)</span>
+                }
+        }
+}
 
 func main() <span class="cov0" title="0">{
         // ドローンコントローラーを作成
@@ -500,11 +578,13 @@ func main() <span class="cov0" title="0">{
 
                 // プログラムの説明を表示
                 <span class="cov0" title="0">fmt.Println("=== Tello ドローンコントローラー ===")
-                fmt.Println("ドローンに接続中...")
                 
                 // 接続確認のため少し待機
-                time.Sleep(2 * time.Second)
-                fmt.Println("準備完了！")</span>
+                err = waitForConnection(droneController, 10*time.Second)
+                if err != nil </span><span class="cov0" title="0">{
+                        fmt.Println("Error:", err)
+                        return
+                }</span>
         }
 
         // ロボットを作成し、ドローンデバイスを設定

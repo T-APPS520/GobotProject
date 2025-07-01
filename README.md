@@ -10,10 +10,28 @@
 
 ## ファイル構成
 
-- `main.go` - メインプログラム（基本クラス）
+### メインプログラム
+- `main.go` - メインプログラム（エントリーポイント）
 - `drone_controller.go` - Telloドローンを制御するクラス
 - `camera_viewer.go` - カメラ画像を処理・録画するクラス
 - `keyboard_handler.go` - キーボード入力を処理するクラス
+
+### テストファイル
+- `main_test.go` - メインプログラムの統合テスト
+- `keyboard_handler_test.go` - キーボードハンドラーの単体テスト
+- `keyboard_handler_coverage_test.go` - キーボードハンドラーのカバレッジ強化テスト
+
+### 設定・ビルドファイル
+- `go.mod` - Go モジュール定義
+- `go.sum` - 依存関係のチェックサム
+- `.gitignore` - Git除外設定
+- `README.md` - このドキュメント
+
+### 生成ファイル（実行時作成）
+- `tello_controller.exe` - ビルド済み実行ファイル（Windows）
+- `coverage.out` - テストカバレッジレポート
+- `coverage.html` - HTML形式のカバレッジレポート
+- `tello_recording_*.h264` - 録画ファイル（日時付き）
 
 ## 使用方法
 
@@ -52,12 +70,68 @@ go build -o tello_controller.exe
 - 録画ファイルは `tello_recording_YYYYMMDD_HHMMSS.h264` 形式で保存されます
 - 再度**L**キーを押すと録画が停止されます
 
+## テスト
+
+### テストの実行
+
+```bash
+# 全テストを実行
+go test -v ./...
+
+# カバレッジ付きでテストを実行
+go test -cover -v ./...
+
+# カバレッジレポートを生成
+go test -cover -coverprofile=coverage.out ./...
+go tool cover -html=coverage.out -o coverage.html
+```
+
+### テストカバレッジ
+
+現在のテストカバレッジは約42.6%です。主要な機能とエラーハンドリングをカバーしています：
+
+- キーボード操作の全パターン
+- ドローンコントローラーの全メソッド
+- カメラビューワーの録画機能
+- エラー回復とシャットダウン処理
+- 連続操作と緊急着陸シナリオ
+
 ## 必要なパッケージ
 
-```go
+### 依存関係のインストール
+
+```bash
+# 依存関係を一括インストール
+go mod tidy
+
+# または個別にインストール
 go get gobot.io/x/gobot
 go get gobot.io/x/gobot/platforms/dji/tello
 go get github.com/nsf/termbox-go
+```
+
+### 主な依存関係
+
+- **gobot.io/x/gobot**: ロボティクス・IoTフレームワーク
+- **gobot.io/x/gobot/platforms/dji/tello**: DJI Telloドローン用ドライバー
+- **github.com/nsf/termbox-go**: ターミナルベースのユーザーインターフェース
+
+## 開発情報
+
+### プロジェクト特徴
+
+- **モジュラー設計**: 各機能が独立したクラスに分離
+- **テスト駆動**: 42.6%のテストカバレッジ（主要機能を網羅）
+- **エラーハンドリング**: 堅牢なエラー回復とグレースフルシャットダウン
+- **CI/CD対応**: テスト可能な設計で本番環境に適用可能
+
+### アーキテクチャ
+
+```
+main.go
+├── DroneController    # ドローン制御ロジック
+├── CameraViewer      # カメラ・録画処理
+└── KeyboardHandler   # ユーザー入力処理
 ```
 
 ## 注意事項

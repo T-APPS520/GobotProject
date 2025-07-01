@@ -15,6 +15,7 @@ type KeyboardHandler struct {
 	droneController *DroneController
 	cameraViewer    *CameraViewer
 	isRunning       bool
+	shutdownCallback func() // 終了時のコールバック関数
 }
 
 // NewKeyboardHandler は新しいキーボードハンドラーを作成
@@ -23,6 +24,14 @@ func NewKeyboardHandler(droneController *DroneController, cameraViewer *CameraVi
 		droneController: droneController,
 		cameraViewer:    cameraViewer,
 		isRunning:       false,
+		shutdownCallback: func() { os.Exit(1) }, // デフォルトの終了処理
+	}
+}
+
+// SetShutdownCallback はカスタムシャットダウンコールバックを設定
+func (kh *KeyboardHandler) SetShutdownCallback(callback func()) {
+	if callback != nil {
+		kh.shutdownCallback = callback
 	}
 }
 
@@ -155,8 +164,10 @@ func (kh *KeyboardHandler) gracefulShutdown() {
 		kh.cameraViewer.Stop()
 	}
 
-	// プログラムを終了
-	os.Exit(1)
+	// 設定されたシャットダウンコールバックを実行
+	if kh.shutdownCallback != nil {
+		kh.shutdownCallback()
+	}
 }
 
 // IsRunning は実行中かどうかを返す

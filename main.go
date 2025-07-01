@@ -7,6 +7,29 @@ import (
 	"gobot.io/x/gobot"
 )
 
+// waitForConnection 接続確認を行い、タイムアウト付きで待機
+func waitForConnection(droneController *DroneController, maxWaitTime time.Duration) error {
+	fmt.Println("ドローンに接続中...")
+	
+	// シンプルな接続確認（実際の実装では、ドローンの状態を確認）
+	startTime := time.Now()
+	ticker := time.NewTicker(100 * time.Millisecond)
+	defer ticker.Stop()
+	
+	for {
+		select {
+		case <-ticker.C:
+			// 実際の接続確認ロジック（ここでは簡略化）
+			if time.Since(startTime) >= time.Second {
+				fmt.Println("準備完了！")
+				return nil
+			}
+		case <-time.After(maxWaitTime):
+			return fmt.Errorf("接続タイムアウト: %v", maxWaitTime)
+		}
+	}
+}
+
 func main() {
 	// ドローンコントローラーを作成
 	droneController := NewDroneController()
@@ -31,11 +54,13 @@ func main() {
 
 		// プログラムの説明を表示
 		fmt.Println("=== Tello ドローンコントローラー ===")
-		fmt.Println("ドローンに接続中...")
 		
 		// 接続確認のため少し待機
-		time.Sleep(2 * time.Second)
-		fmt.Println("準備完了！")
+		err = waitForConnection(droneController, 10*time.Second)
+		if err != nil {
+			fmt.Println("Error:", err)
+			return
+		}
 	}
 
 	// ロボットを作成し、ドローンデバイスを設定
