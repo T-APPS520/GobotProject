@@ -1,0 +1,43 @@
+# Goのビルド成果物
+*.exe
+*.dll
+*.so
+*.dylib
+
+# テスト関連
+*.out
+*.test
+
+# カバレッジレポート
+coverage.html
+coverage.out
+coverage_*.out
+
+# エディター関連
+.vscode/
+.idea/
+
+# OS関連
+.DS_Store
+Thumbs.db
+
+# ログファイル
+*.log
+
+# 録画ファイル
+*.h264
+tello_recording_*.h264
+tello_recording_*.mp4
+tello_recording_*.mov
+
+# テスト用メディアファイル
+test_*.mp4
+test_*.mov
+demo_*.mp4
+demo_*.mov
+*_test.mp4
+*_test.mov
+
+# 一時ファイル
+*.tmp
+*.temp
