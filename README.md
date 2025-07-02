@@ -1,40 +1,24 @@
 # Tello ドローンコントローラー
 
-このプログラムは、DJI Telloドローンをキーボードで制御し、カメラの映像を録画できるGoアプリケーションです。
+このプログラムは、DJI Telloドローンをキーボードで制御できるGoアプリケーションです。
 
 ## 機能
 
 - **ドローン制御**: キーボードでドローンの離陸、着陸、移動を制御
-- **カメラビューワー**: ドローンのカメラからビデオストリームを受信
-- **QuickTime MOV録画**: カメラの映像を直接QuickTime MOV形式で録画（FFmpeg不要）
-
-## 録画機能の特徴
-
-### QuickTime MOV形式
-- **ファイル形式**: Apple QuickTime movie (.MOV)
-- **互換性**: macOSのQuickTime Playerでネイティブ再生可能
-- **ファイルタイプ**: `qt  ` (QuickTime) brand / `com.apple.quicktime-movie`
-- **FFmpeg不要**: 外部ツールを使わず直接MOV形式で録画
-
-### 録画仕様
-- **フォーマット**: H.264 video stream → QuickTime MOV
-- **ファイル名**: `tello_recording_YYYYMMDD_HHMMSS.microseconds.mov`
-- **録画開始/停止**: `L`キーで切り替え
-- **自動保存**: 録画停止時に自動的にファイル保存
 
 ## ファイル構成
 
 ### メインプログラム
 - `main.go` - メインプログラム（エントリーポイント）
 - `drone_controller.go` - Telloドローンを制御するクラス
-- `camera_viewer.go` - カメラ画像を処理・録画するクラス
+- `camera_viewer.go` - カメラ画像を処理・表示するクラス
 - `keyboard_handler.go` - キーボード入力を処理するクラス
 
 ### テストファイル
 - `main_test.go` - メインプログラムの統合テスト
 - `keyboard_handler_test.go` - キーボードハンドラーの単体テスト
 - `keyboard_handler_coverage_test.go` - キーボードハンドラーのカバレッジ強化テスト
-- `camera_viewer_test.go` - カメラビューワーとMP4録画のテスト
+- `camera_viewer_test.go` - カメラビューワーのテスト
 
 ### 設定・ビルドファイル
 - `go.mod` - Go モジュール定義
@@ -46,7 +30,6 @@
 - `tello_controller.exe` - ビルド済み実行ファイル（Windows）
 - `coverage.out` - テストカバレッジレポート
 - `coverage.html` - HTML形式のカバレッジレポート
-- `tello_recording_*.mov` - 録画ファイル（QuickTime MOV形式、日時付き）
 
 ## 使用方法
 
@@ -59,7 +42,7 @@
 ### 2. プログラムの実行
 
 ```bash
-l
+go run .
 # または
 go build -o tello_controller.exe
 .\tello_controller.exe
@@ -76,21 +59,7 @@ go build -o tello_controller.exe
 | **Space** | 上昇 |
 | **Z** | 降下 |
 | **Escape** | 離陸/着陸の切り替え |
-| **L** | 録画開始/停止 |
 | **Q** | プログラム終了 |
-
-### 4. 録画について
-
-- **L**キーを押すと録画が開始されます
-- 録画ファイルは `tello_recording_YYYYMMDD_HHMMSS.mp4` 形式で保存されます
-- 再度**L**キーを押すと録画が停止されます
-
-#### 録画形式について
-
-- **MP4形式**: H.264ビデオストリームを直接MP4コンテナに記録
-  - 多くのデバイスやプレイヤーで再生可能
-  - Web配信やモバイルデバイスでの再生に最適
-  - 外部のFFmpegツールは不要
 
 ## テスト
 
@@ -114,7 +83,7 @@ go tool cover -html=coverage.out -o coverage.html
 
 - キーボード操作の全パターン
 - ドローンコントローラーの全メソッド
-- カメラビューワーの録画機能
+- カメラビューワーの基本機能
 - エラー回復とシャットダウン処理
 - 連続操作と緊急着陸シナリオ
 
@@ -152,7 +121,7 @@ go get github.com/nsf/termbox-go
 ```
 main.go
 ├── DroneController    # ドローン制御ロジック
-├── CameraViewer      # カメラ・録画処理
+├── CameraViewer      # カメラ・表示処理
 └── KeyboardHandler   # ユーザー入力処理
 ```
 
@@ -173,11 +142,3 @@ main.go
 ### キーボード操作が効かない場合
 - プログラムのコンソール画面がアクティブになっているか確認
 - termbox-goパッケージが正しくインストールされているか確認
-
-### 録画ファイルが作成されない場合
-- プログラムの実行ディレクトリに書き込み権限があるか確認
-- ディスクの空き容量があるか確認
-
-## ライセンス
-
-このプロジェクトはMITライセンスの下で公開されています。
