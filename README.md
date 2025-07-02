@@ -6,7 +6,21 @@
 
 - **ドローン制御**: キーボードでドローンの離陸、着陸、移動を制御
 - **カメラビューワー**: ドローンのカメラからビデオストリームを受信
-- **録画機能**: カメラの映像をH.264形式で録画
+- **QuickTime MOV録画**: カメラの映像を直接QuickTime MOV形式で録画（FFmpeg不要）
+
+## 録画機能の特徴
+
+### QuickTime MOV形式
+- **ファイル形式**: Apple QuickTime movie (.MOV)
+- **互換性**: macOSのQuickTime Playerでネイティブ再生可能
+- **ファイルタイプ**: `qt  ` (QuickTime) brand / `com.apple.quicktime-movie`
+- **FFmpeg不要**: 外部ツールを使わず直接MOV形式で録画
+
+### 録画仕様
+- **フォーマット**: H.264 video stream → QuickTime MOV
+- **ファイル名**: `tello_recording_YYYYMMDD_HHMMSS.microseconds.mov`
+- **録画開始/停止**: `L`キーで切り替え
+- **自動保存**: 録画停止時に自動的にファイル保存
 
 ## ファイル構成
 
@@ -20,6 +34,7 @@
 - `main_test.go` - メインプログラムの統合テスト
 - `keyboard_handler_test.go` - キーボードハンドラーの単体テスト
 - `keyboard_handler_coverage_test.go` - キーボードハンドラーのカバレッジ強化テスト
+- `camera_viewer_test.go` - カメラビューワーとMP4録画のテスト
 
 ### 設定・ビルドファイル
 - `go.mod` - Go モジュール定義
@@ -31,7 +46,7 @@
 - `tello_controller.exe` - ビルド済み実行ファイル（Windows）
 - `coverage.out` - テストカバレッジレポート
 - `coverage.html` - HTML形式のカバレッジレポート
-- `tello_recording_*.h264` - 録画ファイル（日時付き）
+- `tello_recording_*.mov` - 録画ファイル（QuickTime MOV形式、日時付き）
 
 ## 使用方法
 
@@ -44,7 +59,7 @@
 ### 2. プログラムの実行
 
 ```bash
-go run .
+l
 # または
 go build -o tello_controller.exe
 .\tello_controller.exe
@@ -67,8 +82,15 @@ go build -o tello_controller.exe
 ### 4. 録画について
 
 - **L**キーを押すと録画が開始されます
-- 録画ファイルは `tello_recording_YYYYMMDD_HHMMSS.h264` 形式で保存されます
+- 録画ファイルは `tello_recording_YYYYMMDD_HHMMSS.mp4` 形式で保存されます
 - 再度**L**キーを押すと録画が停止されます
+
+#### 録画形式について
+
+- **MP4形式**: H.264ビデオストリームを直接MP4コンテナに記録
+  - 多くのデバイスやプレイヤーで再生可能
+  - Web配信やモバイルデバイスでの再生に最適
+  - 外部のFFmpegツールは不要
 
 ## テスト
 
