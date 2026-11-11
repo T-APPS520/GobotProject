@@ -13,8 +13,11 @@ package main
 // （除外一覧と根拠はPRおよびREADMEに明記）。
 
 import (
+	"context"
 	"os"
+	"os/exec"
 	"path/filepath"
+	"runtime"
 	"testing"
 	"time"
 
@@ -164,10 +167,11 @@ func TestProcessKeyNilViewerCoverage(t *testing.T) {
 	kh := NewKeyboardHandler(NewDroneController(), nil)
 	kh.SetShutdownCallback(func() {})
 
-	// 'l' キー: ビューワーが nil なら何もしない
-	recoverCall(func() {
-		kh.processKey(termbox.Event{Type: termbox.EventKey, Ch: 'l'})
-	})
+	// 'l' キー: ビューワーが nil なら何もしない。
+	// このケースではドライバー起因の panic は起こり得ないため、あえて
+	// recover せずに直接呼び出す（nil 参照などの退行があれば panic で
+	// テストが失敗するようにする）
+	kh.processKey(termbox.Event{Type: termbox.EventKey, Ch: 'l'})
 }
 
 // TestGracefulShutdownCompletesCoverage 終了処理が完走するパターン
@@ -194,27 +198,59 @@ func TestGracefulShutdownCompletesCoverage(t *testing.T) {
 }
 
 // TestSetupSignalHandlingCoverage シグナル受信で終了処理が動くことを確認
+//
+// SIGINT はプロセス内のすべての signal.Notify 登録へ配信される。他の
+// テストが登録したハンドラー（実端末がある環境で Start が成功したもの
+// など）が残っていると、シグナル送信時に未接続ドライバーの Land() が
+// 別 goroutine で panic し、テストプロセス全体が落ちてしまう。そのため
+// 受信の実証は、このテストだけを実行する子プロセスに隔離する。
+// Windows ではプロセス自身へ os.Interrupt を送信できないためスキップする。
 func TestSetupSignalHandlingCoverage(t *testing.T) {
-	kh := NewKeyboardHandler(nil, nil)
-	done := make(chan struct{})
-	kh.SetShutdownCallback(func() { close(done) })
+	if runtime.GOOS == "windows" {
+		t.Skip("Windows では os.Interrupt の自己送信がサポートされないためスキップ")
+	}
 
+	if os.Getenv("GOBOT_SIGNAL_TEST_CHILD") == "1" {
+		// 子プロセス側: このテストのハンドラーだけが登録された状態で
+		// シグナル受信を実証する
+		kh := NewKeyboardHandler(nil, nil)
+		done := make(chan struct{})
+		kh.SetShutdownCallback(func() { close(done) })
+
+		kh.setupSignalHandling()
+
+		proc, err := os.FindProcess(os.Getpid())
+		if err != nil {
+			t.Fatalf("自プロセスの取得に失敗: %v", err)
+		}
+		if err := proc.Signal(os.Interrupt); err != nil {
+			t.Fatalf("シグナル送信に失敗: %v", err)
+		}
+
+		select {
+		case <-done:
+			// 終了処理が完走した
+		case <-time.After(3 * time.Second):
+			t.Fatal("シグナルで終了処理が動かなかった")
+		}
+		return
+	}
+
+	// 親プロセス側: 登録処理だけは自プロセスでも実行する
+	// （シグナル自体は送らない）
+	kh := NewKeyboardHandler(nil, nil)
+	kh.SetShutdownCallback(func() {})
 	kh.setupSignalHandling()
 
-	// 自プロセスへ SIGINT を送る（Notify 登録済みのため終了はしない）
-	proc, err := os.FindProcess(os.Getpid())
+	// 受信の実証は子プロセスで行う
+	ctx, cancel := context.WithTimeout(context.Background(), 30*time.Second)
+	defer cancel()
+	cmd := exec.CommandContext(ctx, os.Args[0],
+		"-test.run", "^TestSetupSignalHandlingCoverage$", "-test.v")
+	cmd.Env = append(os.Environ(), "GOBOT_SIGNAL_TEST_CHILD=1")
+	out, err := cmd.CombinedOutput()
 	if err != nil {
-		t.Fatalf("自プロセスの取得に失敗: %v", err)
-	}
-	if err := proc.Signal(os.Interrupt); err != nil {
-		t.Fatalf("シグナル送信に失敗: %v", err)
-	}
-
-	select {
-	case <-done:
-		// 終了処理が完走した
-	case <-time.After(3 * time.Second):
-		t.Fatal("シグナルで終了処理が動かなかった")
+		t.Fatalf("子プロセスでのシグナル検証に失敗: %v\n%s", err, out)
 	}
 }
 
@@ -315,6 +351,12 @@ func TestProcessFrameBranchesCoverage(t *testing.T) {
 
 // TestStartRecordingErrorCoverage 録画ファイルを作れない場合の分岐
 func TestStartRecordingErrorCoverage(t *testing.T) {
+	if runtime.GOOS == "windows" {
+		// Windows ではプロセスのカレントディレクトリを削除できないため、
+		// 削除済みディレクトリを使うこの手法は使えない
+		t.Skip("削除済みカレントディレクトリを使う手法は Windows では使えないためスキップ")
+	}
+
 	saved, err := os.Getwd()
 	if err != nil {
 		t.Fatalf("カレントディレクトリ取得に失敗: %v", err)
