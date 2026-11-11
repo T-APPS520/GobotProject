@@ -112,15 +112,24 @@ func (cv *CameraViewer) streamStartLoop() {
 
 // Stop はカメラビューワーを停止
 func (cv *CameraViewer) Stop() {
+	// 実行状態の変更とプレイヤー破棄を playerMu の中でまとめて行う。
+	// 処理途中のフレームがこの後にプレイヤーを作り直せないようにするため
+	// （ensurePlayer は同じロックの中で実行状態を確認する）
+	cv.playerMu.Lock()
 	cv.isRunning = false
+	player := cv.player
+	cv.player = nil
+	cv.playerMu.Unlock()
+
+	// 映像表示プレイヤーを終了する（ロック外：書き込み中でも待たされない）
+	if player != nil {
+		player.Close()
+	}
 
 	// ビデオ開始要求の再送ループを止める
 	if cv.streamStopCh != nil {
 		cv.streamStopOnce.Do(func() { close(cv.streamStopCh) })
 	}
-
-	// 映像表示プレイヤーを終了する
-	cv.closePlayer()
 
 	if cv.isRecording {
 		cv.StopRecording()
@@ -164,58 +173,85 @@ func (cv *CameraViewer) displayFrame(frameData []byte) {
 		return
 	}
 
+	player := cv.ensurePlayer()
+	if player == nil {
+		return
+	}
+
+	// パイプへの書き込みは playerMu を保持せずに行う。
+	// プレイヤーが応答しなくなって書き込みが止まっても、Stop から
+	// プレイヤーを終了して書き込みを解き放てるようにするため
+	if _, err := player.Write(frameData); err != nil {
+		log.Printf("映像プレイヤーへの書き込みに失敗したため破棄します: %v", err)
+		cv.discardPlayer(player)
+		return
+	}
+
 	cv.playerMu.Lock()
-	defer cv.playerMu.Unlock()
-
-	if cv.player == nil {
-		if time.Now().Before(cv.playerRetryAt) {
-			return // 起動失敗直後の連続リトライを抑える
-		}
-		player, err := cv.playerFactory()
-		if err != nil {
-			if !cv.playerWarned {
-				log.Printf("カメラ映像を表示できません: %v", err)
-				cv.playerWarned = true
-			}
-			cv.playerRetryAt = time.Now().Add(10 * time.Second)
-			return
-		}
-		if err := player.Start(); err != nil {
-			log.Printf("映像プレイヤーの起動に失敗: %v", err)
-			cv.playerRetryAt = time.Now().Add(5 * time.Second)
-			return
-		}
-		cv.player = player
-		log.Printf("カメラ映像を表示しています（プレイヤー: %s）", player.Name())
-	}
-
-	if !cv.player.Running() {
-		// プレイヤーが終了していたら作り直す
-		cv.player.Close()
-		cv.player = nil
-		cv.playerRetryAt = time.Now().Add(2 * time.Second)
-		return
-	}
-
-	if _, err := cv.player.Write(frameData); err != nil {
-		log.Printf("映像プレイヤーへの書き込みに失敗したため、次回フレームで再起動します: %v", err)
-		cv.player.Close()
-		cv.player = nil
-		cv.playerRetryAt = time.Now().Add(2 * time.Second)
-		return
-	}
 	cv.displayedFrames++
+	cv.playerMu.Unlock()
 }
 
-// closePlayer は映像表示プレイヤーを終了する
-func (cv *CameraViewer) closePlayer() {
+// ensurePlayer は表示用プレイヤーを用意する（無ければ起動する）
+//
+// 実行状態の確認とプレイヤー生成は playerMu の中でまとめて行う。
+// Stop も同じロックの中で実行状態を落としてプレイヤーを破棄するため、
+// 停止処理と競合したフレームがプレイヤーを作り直すことはない。
+// 用意できなかった場合（停止済み・リトライ抑制中・プレイヤー無し）は nil を返す。
+func (cv *CameraViewer) ensurePlayer() *VideoPlayer {
 	cv.playerMu.Lock()
 	defer cv.playerMu.Unlock()
 
+	if !cv.isRunning {
+		return nil // 停止済みなら新規に起動しない
+	}
+
 	if cv.player != nil {
+		if cv.player.Running() {
+			return cv.player
+		}
+		// プレイヤーが終了していたら作り直す（このフレームは次回に回す）
 		cv.player.Close()
 		cv.player = nil
+		cv.playerRetryAt = time.Now().Add(2 * time.Second)
+		return nil
 	}
+
+	if time.Now().Before(cv.playerRetryAt) {
+		return nil // 起動失敗直後の連続リトライを抑える
+	}
+
+	player, err := cv.playerFactory()
+	if err != nil {
+		if !cv.playerWarned {
+			log.Printf("カメラ映像を表示できません: %v", err)
+			cv.playerWarned = true
+		}
+		cv.playerRetryAt = time.Now().Add(10 * time.Second)
+		return nil
+	}
+	if err := player.Start(); err != nil {
+		log.Printf("映像プレイヤーの起動に失敗: %v", err)
+		cv.playerRetryAt = time.Now().Add(5 * time.Second)
+		return nil
+	}
+
+	cv.player = player
+	log.Printf("カメラ映像を表示しています（プレイヤー: %s）", player.Name())
+	return player
+}
+
+// discardPlayer は書き込みに失敗したプレイヤーを破棄する
+// （既に別のプレイヤーへ差し替わっていた場合は、現在のものには触れない）
+func (cv *CameraViewer) discardPlayer(player *VideoPlayer) {
+	cv.playerMu.Lock()
+	if cv.player == player {
+		cv.player = nil
+		cv.playerRetryAt = time.Now().Add(2 * time.Second)
+	}
+	cv.playerMu.Unlock()
+
+	player.Close()
 }
 
 // IsDisplaying はカメラ映像を画面表示中かどうかを返す

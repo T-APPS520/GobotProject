@@ -38,7 +38,7 @@ var playerCandidates = []playerSpec{
 			"--profile=low-latency",
 			"--demuxer-lavf-format=h264",
 			"--no-cache",
-			"--window-title=Tello Camera",
+			"--title=Tello Camera", // mpvのウィンドウタイトル指定は --title（--window-title は ffplay 用）
 			"-",
 		},
 	},
@@ -65,12 +65,21 @@ func detectPlayer() (playerSpec, bool) {
 }
 
 // VideoPlayer はH.264ストリームを外部プレイヤーへパイプしてPC画面に表示するクラス
+//
+// ロックの方針（デッドロック防止）:
+//   - mu はプロセス状態（cmd/stdin/exited）の読み書き専用で、パイプI/Oの間は保持しない
+//   - writeMu は Write 同士の直列化専用で、Close は取得しない
+//
+// そのため、プレイヤーが標準入力を読まなくなり Write がブロックしても、
+// Close は mu だけですぐにプロセスを終了でき、ブロックした Write は
+// パイプのエラーで解き放たれる。
 type VideoPlayer struct {
-	spec   playerSpec
-	cmd    *exec.Cmd
-	stdin  io.WriteCloser
-	exited chan struct{}
-	mu     sync.Mutex
+	spec    playerSpec
+	mu      sync.Mutex
+	cmd     *exec.Cmd
+	stdin   io.WriteCloser
+	exited  chan struct{}
+	writeMu sync.Mutex
 }
 
 // NewVideoPlayer は利用可能なプレイヤーを自動検出して作成する
@@ -110,14 +119,18 @@ func (p *VideoPlayer) Start() error {
 		return fmt.Errorf("プレイヤー（%s）の起動に失敗: %w", p.spec.name, err)
 	}
 
+	// 終了通知チャネルはこのプロセス専用として捕捉してから監視する。
+	// フィールドを監視側で読み直すと、Close→Start で作り直した
+	// 次のプロセスのチャネルを閉じてしまうため
+	exited := make(chan struct{})
 	p.cmd = cmd
 	p.stdin = stdin
-	p.exited = make(chan struct{})
+	p.exited = exited
 
 	// プロセス終了を監視してゾンビプロセス化を防ぐ
 	go func() {
 		cmd.Wait()
-		close(p.exited)
+		close(exited)
 	}()
 
 	return nil
@@ -126,13 +139,14 @@ func (p *VideoPlayer) Start() error {
 // Running はプレイヤーが起動中かどうかを返す
 func (p *VideoPlayer) Running() bool {
 	p.mu.Lock()
-	defer p.mu.Unlock()
+	exited := p.exited
+	p.mu.Unlock()
 
-	if p.cmd == nil || p.exited == nil {
+	if exited == nil {
 		return false
 	}
 	select {
-	case <-p.exited:
+	case <-exited:
 		return false
 	default:
 		return true
@@ -140,32 +154,45 @@ func (p *VideoPlayer) Running() bool {
 }
 
 // Write はH.264フレームデータをプレイヤーへ送る（io.Writer）
+//
+// 書き込み先を取り出してから mu を離すため、パイプI/Oでブロックしても
+// Close や Running を妨げない。Close されると書き込みはエラーになる。
 func (p *VideoPlayer) Write(frameData []byte) (int, error) {
 	p.mu.Lock()
-	defer p.mu.Unlock()
+	stdin := p.stdin
+	p.mu.Unlock()
 
-	if p.stdin == nil {
+	if stdin == nil {
 		return 0, fmt.Errorf("プレイヤーが起動していません")
 	}
-	return p.stdin.Write(frameData)
+
+	p.writeMu.Lock()
+	defer p.writeMu.Unlock()
+	return stdin.Write(frameData)
 }
 
 // Close はプレイヤーを終了する
+//
+// 状態を取り出してクリアしてからロック外で終了処理を行う。
+// Write がブロックしている最中でも即座に実行できる。
 func (p *VideoPlayer) Close() error {
 	p.mu.Lock()
-	defer p.mu.Unlock()
+	stdin := p.stdin
+	cmd := p.cmd
+	p.stdin = nil
+	p.cmd = nil
+	p.exited = nil
+	p.mu.Unlock()
 
-	if p.cmd == nil {
+	if cmd == nil {
 		return nil
 	}
 
-	if p.stdin != nil {
-		p.stdin.Close() // EOFでプレイヤーに終了を促す
-		p.stdin = nil
+	if stdin != nil {
+		stdin.Close() // EOFでプレイヤーに終了を促す
 	}
-	if p.cmd.Process != nil {
-		p.cmd.Process.Kill() // 残っていれば確実に終了させる
+	if cmd.Process != nil {
+		cmd.Process.Kill() // 残っていれば確実に終了させる
 	}
-	p.cmd = nil
 	return nil
 }

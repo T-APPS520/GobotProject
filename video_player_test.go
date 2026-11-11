@@ -3,7 +3,9 @@ package main
 import (
 	"errors"
 	"os/exec"
+	"strings"
 	"testing"
+	"time"
 
 	"gobot.io/x/gobot/platforms/dji/tello"
 )
@@ -120,6 +122,158 @@ func TestCameraViewerDisplaysFrames(t *testing.T) {
 	cameraViewer.Stop()
 	if cameraViewer.IsDisplaying() {
 		t.Error("Stop 後は表示中であってはならない")
+	}
+}
+
+// TestVideoPlayerRestartSameInstance Close→Start で同じインスタンスを使い回しても
+// 前のプロセスの終了監視が新しいプロセスの状態を壊さないことを確認
+func TestVideoPlayerRestartSameInstance(t *testing.T) {
+	player := newVideoPlayer(catSpec(t))
+
+	if err := player.Start(); err != nil {
+		t.Fatalf("1回目の起動に失敗: %v", err)
+	}
+	if err := player.Close(); err != nil {
+		t.Fatalf("終了に失敗: %v", err)
+	}
+
+	// 同じインスタンスで再起動
+	if err := player.Start(); err != nil {
+		t.Fatalf("2回目の起動に失敗: %v", err)
+	}
+
+	// 前のプロセスの監視goroutineが発火しても、新しいプロセスは
+	// 起動中のままであること（誤って新しいexitedチャネルを閉じないこと）
+	time.Sleep(300 * time.Millisecond)
+	if !player.Running() {
+		t.Error("再起動したプレイヤーが起動中になっていない（前の監視が干渉している）")
+	}
+
+	// パニックせず終了できること（二重closeにならないこと）
+	if err := player.Close(); err != nil {
+		t.Errorf("再起動後の終了に失敗: %v", err)
+	}
+	time.Sleep(100 * time.Millisecond)
+	if player.Running() {
+		t.Error("終了後は Running であってはならない")
+	}
+}
+
+// TestVideoPlayerCloseUnblocksWrite プレイヤーが入力を読まなくても
+// Close でブロック中の書き込みが解き放たれることを確認（デッドロック防止）
+func TestVideoPlayerCloseUnblocksWrite(t *testing.T) {
+	if _, err := exec.LookPath("sleep"); err != nil {
+		t.Skip("sleep が無い環境ではスキップ")
+	}
+	// sleep は標準入力を一切読まないため、パイプが満杯になると Write が止まる
+	player := newVideoPlayer(playerSpec{name: "sleep", args: []string{"30"}})
+	if err := player.Start(); err != nil {
+		t.Fatalf("プレイヤー起動に失敗: %v", err)
+	}
+
+	writeErr := make(chan error, 1)
+	go func() {
+		chunk := make([]byte, 64*1024)
+		var err error
+		for err == nil {
+			_, err = player.Write(chunk)
+		}
+		writeErr <- err
+	}()
+
+	// パイプが満杯になり Write がブロックするまで待つ
+	time.Sleep(500 * time.Millisecond)
+
+	// Close が即座に戻り、ブロックしていた Write がエラーで終わること
+	closeDone := make(chan struct{})
+	go func() {
+		player.Close()
+		close(closeDone)
+	}()
+	select {
+	case <-closeDone:
+	case <-time.After(3 * time.Second):
+		t.Fatal("Close がブロックしている（デッドロック）")
+	}
+	select {
+	case err := <-writeErr:
+		if err == nil {
+			t.Error("Close 後の Write はエラーになるべき")
+		}
+	case <-time.After(3 * time.Second):
+		t.Fatal("Close しても Write が解き放たれない（デッドロック）")
+	}
+}
+
+// TestCameraViewerNoPlayerAfterStop Stop 後に処理途中のフレームが来ても
+// プレイヤーを作り直さないことを確認
+func TestCameraViewerNoPlayerAfterStop(t *testing.T) {
+	drone := tello.NewDriver("8890")
+	cameraViewer := NewCameraViewer(drone)
+	cameraViewer.playerFactory = func() (*VideoPlayer, error) {
+		return newVideoPlayer(catSpec(t)), nil
+	}
+
+	cameraViewer.isRunning = true
+	cameraViewer.processFrame([]byte{0x00, 0x00, 0x00, 0x01, 0x67})
+	if !cameraViewer.IsDisplaying() {
+		t.Fatal("フレーム処理後は表示中であるべき")
+	}
+	displayed := cameraViewer.GetDisplayedFrameCount()
+
+	cameraViewer.Stop()
+	if cameraViewer.IsDisplaying() {
+		t.Fatal("Stop 後は表示中であってはならない")
+	}
+
+	// Stop をすり抜けたフレームが直接 displayFrame に来ても起動しないこと
+	cameraViewer.displayFrame([]byte{0x00, 0x00, 0x00, 0x01, 0x65})
+	if cameraViewer.IsDisplaying() {
+		t.Error("Stop 後にプレイヤーが作り直されている")
+	}
+	if got := cameraViewer.GetDisplayedFrameCount(); got != displayed {
+		t.Errorf("Stop 後に表示フレーム数が増えている: %d != %d", got, displayed)
+	}
+}
+
+// TestPlayerCandidateArgs プレイヤー候補の引数が各プレイヤーの仕様に合っているか確認
+func TestPlayerCandidateArgs(t *testing.T) {
+	specs := make(map[string]playerSpec)
+	for _, c := range playerCandidates {
+		specs[c.name] = c
+	}
+
+	// mpv のウィンドウタイトルは --title（--window-title は ffplay 用で mpv では起動エラーになる）
+	mpv, ok := specs["mpv"]
+	if !ok {
+		t.Fatal("mpv の候補が無い")
+	}
+	foundTitle := false
+	for _, arg := range mpv.args {
+		if strings.HasPrefix(arg, "--window-title") {
+			t.Errorf("mpv に未対応のオプションが含まれている: %s", arg)
+		}
+		if arg == "--title=Tello Camera" {
+			foundTitle = true
+		}
+	}
+	if !foundTitle {
+		t.Error("mpv の引数に --title=Tello Camera が無い")
+	}
+
+	// ffplay は -window_title が正しい（こちらは変えないこと）
+	ffplay, ok := specs["ffplay"]
+	if !ok {
+		t.Fatal("ffplay の候補が無い")
+	}
+	foundWindowTitle := false
+	for i, arg := range ffplay.args {
+		if arg == "-window_title" && i+1 < len(ffplay.args) && ffplay.args[i+1] == "Tello Camera" {
+			foundWindowTitle = true
+		}
+	}
+	if !foundWindowTitle {
+		t.Error("ffplay の引数から -window_title Tello Camera が欠けている")
 	}
 }
 
