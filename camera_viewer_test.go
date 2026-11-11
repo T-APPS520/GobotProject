@@ -4,6 +4,7 @@ import (
 	"fmt"
 	"os"
 	"path/filepath"
+	"runtime"
 	"strings"
 	"testing"
 	"time"
@@ -431,4 +432,202 @@ func getTestRecordingFiles(t *testing.T) []string {
 	}
 
 	return files
+}
+
+// TestCameraViewerStartStopCoverage Start と Stop を検証する
+func TestCameraViewerStartStopCoverage(t *testing.T) {
+	chdirTo(t, t.TempDir())
+
+	drone := tello.NewDriver("8895")
+	cv := NewCameraViewer(drone)
+
+	recoverCall(cv.Start)
+
+	cv.Stop()
+	if cv.IsRunning() {
+		t.Error("Stop 後は実行中であってはならない")
+	}
+
+	cv.StartRecording()
+	if !cv.IsRecording() {
+		t.Fatal("録画が開始していない")
+	}
+	cv.Stop()
+	if cv.IsRecording() {
+		t.Error("Stop 後は録画停止であるべき")
+	}
+}
+
+// TestProcessFrameBranchesCoverage フレーム処理を検証する
+func TestProcessFrameBranchesCoverage(t *testing.T) {
+	chdirTo(t, t.TempDir())
+
+	drone := tello.NewDriver("8897")
+	cv := NewCameraViewer(drone)
+	cv.isRunning = true
+
+	frame := []byte{0x00, 0x00, 0x00, 0x01, 0x65}
+	for i := 0; i < 150; i++ {
+		cv.processFrame(frame)
+	}
+	if cv.frameCount != 150 {
+		t.Errorf("フレーム数が不正: %d", cv.frameCount)
+	}
+
+	cv.StartRecording()
+	cv.processFrame(frame)
+	cv.StopRecording()
+
+	cv.isRunning = false
+	cv.processFrame(frame)
+	if cv.frameCount != 151 {
+		t.Errorf("停止中のフレームが数えられている: %d", cv.frameCount)
+	}
+}
+
+// TestStartRecordingErrorCoverage 録画ファイルを作成できない場合を検証する
+func TestStartRecordingErrorCoverage(t *testing.T) {
+	if runtime.GOOS == "windows" {
+		t.Skip("Windows ではカレントディレクトリを削除できない")
+	}
+
+	saved, err := os.Getwd()
+	if err != nil {
+		t.Fatalf("カレントディレクトリ取得に失敗: %v", err)
+	}
+	defer os.Chdir(saved)
+
+	tmp := t.TempDir()
+	if err := os.Chdir(tmp); err != nil {
+		t.Fatalf("ディレクトリ移動に失敗: %v", err)
+	}
+	if err := os.RemoveAll(tmp); err != nil {
+		t.Fatalf("ディレクトリ削除に失敗: %v", err)
+	}
+
+	cv := NewCameraViewer(tello.NewDriver("8901"))
+	cv.StartRecording()
+	if cv.IsRecording() {
+		t.Error("ファイル作成に失敗したのに録画中になっている")
+	}
+}
+
+// TestMP4WriterCoverage MP4ライターを検証する
+func TestMP4WriterCoverage(t *testing.T) {
+	dir := t.TempDir()
+	path := filepath.Join(dir, "test.mov")
+
+	w, err := NewMP4Writer(path)
+	if err != nil {
+		t.Fatalf("ライター作成に失敗: %v", err)
+	}
+
+	if err := w.WriteFrame(nil); err != nil {
+		t.Errorf("空フレーム書き込みでエラー: %v", err)
+	}
+	if err := w.WriteFrame([]byte{0x00, 0x00, 0x00, 0x01, 0x67}); err != nil {
+		t.Errorf("フレーム書き込みでエラー: %v", err)
+	}
+	if w.frameNum != 1 {
+		t.Errorf("フレーム数が不正: %d", w.frameNum)
+	}
+
+	if err := w.Close(); err != nil {
+		t.Errorf("クローズでエラー: %v", err)
+	}
+	if err := w.Close(); err != nil {
+		t.Errorf("二重クローズでエラー: %v", err)
+	}
+
+	if _, err := NewMP4Writer(filepath.Join(dir, "no-such-dir", "x.mov")); err == nil {
+		t.Error("存在しないディレクトリではエラーになるべき")
+	}
+
+	if _, err := os.Stat("/dev/full"); err == nil {
+		wf, err := NewMP4Writer("/dev/full")
+		if err != nil {
+			t.Skipf("/dev/full を開けなかった: %v", err)
+		}
+		if err := wf.Close(); err == nil {
+			t.Error("/dev/full ではクローズがエラーになるべき")
+		}
+	}
+}
+
+// TestStopRecordingCloseErrorCoverage 録画ファイルの保存に失敗する場合を検証する
+func TestStopRecordingCloseErrorCoverage(t *testing.T) {
+	chdirTo(t, t.TempDir())
+
+	cv := NewCameraViewer(tello.NewDriver("8902"))
+	cv.StartRecording()
+	if !cv.IsRecording() {
+		t.Fatal("録画が開始していない")
+	}
+
+	if cv.mp4Writer != nil && cv.mp4Writer.file != nil {
+		cv.mp4Writer.file.Close()
+	}
+	cv.StopRecording()
+	if cv.IsRecording() {
+		t.Error("停止後は録画中であってはならない")
+	}
+}
+
+// TestMP4BoxBuildersCoverage MP4ボックス生成を検証する
+func TestMP4BoxBuildersCoverage(t *testing.T) {
+	dir := t.TempDir()
+	f, err := os.Create(filepath.Join(dir, "boxes.mov"))
+	if err != nil {
+		t.Fatalf("ファイル作成に失敗: %v", err)
+	}
+	defer f.Close()
+
+	w := &MP4Writer{
+		file:      f,
+		startTime: time.Now().Add(-10 * time.Second),
+		frameNum:  5,
+		frameData: [][]byte{{0x01, 0x02}},
+	}
+
+	if len(w.createQuickTimeMovieBox()) == 0 {
+		t.Error("moovボックスが空")
+	}
+	wFresh := &MP4Writer{
+		file:      f,
+		startTime: time.Now(),
+		frameNum:  7,
+	}
+	if len(wFresh.createQuickTimeMovieBox()) == 0 {
+		t.Error("moovボックスが空（duration 0）")
+	}
+	if len(w.createQuickTimeMovieHeaderBox(100)) == 0 {
+		t.Error("mvhdボックスが空")
+	}
+	if len(w.createQuickTimeVideoTrackBox(100)) == 0 {
+		t.Error("trakボックスが空")
+	}
+	if len(w.createTrackHeaderBox(100)) == 0 {
+		t.Error("tkhdボックスが空")
+	}
+	if len(w.createMediaBox(100)) == 0 {
+		t.Error("mdiaボックスが空")
+	}
+	if len(w.createMediaHeaderBox(100)) == 0 {
+		t.Error("mdhdボックスが空")
+	}
+	if len(w.createHandlerBox()) == 0 {
+		t.Error("hdlrボックスが空")
+	}
+	if len(w.createMediaInfoBox()) == 0 {
+		t.Error("minfボックスが空")
+	}
+	if len(w.createSimpleMovieBox()) == 0 {
+		t.Error("簡易moovボックスが空")
+	}
+	if err := w.createQuickTimeCompatibleMP4(); err != nil {
+		t.Errorf("QuickTime互換MP4の作成でエラー: %v", err)
+	}
+	if err := w.createMinimalQuickTimeMP4(); err != nil {
+		t.Errorf("最小MP4の作成でエラー: %v", err)
+	}
 }
