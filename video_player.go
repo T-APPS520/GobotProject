@@ -14,10 +14,8 @@ type playerSpec struct {
 }
 
 // playerCandidates は表示に使える外部プレイヤーの候補（優先順）
-//
-// Telloの映像はH.264エレメンタリストリームとして届くため、
-// 標準入力をデコードして表示できるプレイヤーを使う
-// （Gobot公式のTelloサンプルと同じ方式）。
+// 標準入力へ H.264 をパイプして表示する方式
+// 参考: https://github.com/hybridgroup/gophercon-2019/blob/HEAD/drone/tello/README.md
 var playerCandidates = []playerSpec{
 	{
 		name: "ffplay",
@@ -64,15 +62,8 @@ func detectPlayer() (playerSpec, bool) {
 	return playerSpec{}, false
 }
 
-// VideoPlayer はH.264ストリームを外部プレイヤーへパイプしてPC画面に表示するクラス
-//
-// ロックの方針（デッドロック防止）:
-//   - mu はプロセス状態（cmd/stdin/exited）の読み書き専用で、パイプI/Oの間は保持しない
-//   - writeMu は Write 同士の直列化専用で、Close は取得しない
-//
-// そのため、プレイヤーが標準入力を読まなくなり Write がブロックしても、
-// Close は mu だけですぐにプロセスを終了でき、ブロックした Write は
-// パイプのエラーで解き放たれる。
+// VideoPlayer は H.264 ストリームを外部プレイヤーへパイプして表示する
+// mu はパイプI/Oの間は保持しない。writeMu は Write 同士の直列化専用
 type VideoPlayer struct {
 	spec    playerSpec
 	mu      sync.Mutex
@@ -119,9 +110,7 @@ func (p *VideoPlayer) Start() error {
 		return fmt.Errorf("プレイヤー（%s）の起動に失敗: %w", p.spec.name, err)
 	}
 
-	// 終了通知チャネルはこのプロセス専用として捕捉してから監視する。
-	// フィールドを監視側で読み直すと、Close→Start で作り直した
-	// 次のプロセスのチャネルを閉じてしまうため
+	// 終了通知チャネルはこのプロセス専用として捕捉してから監視する
 	exited := make(chan struct{})
 	p.cmd = cmd
 	p.stdin = stdin
@@ -153,10 +142,7 @@ func (p *VideoPlayer) Running() bool {
 	}
 }
 
-// Write はH.264フレームデータをプレイヤーへ送る（io.Writer）
-//
-// 書き込み先を取り出してから mu を離すため、パイプI/Oでブロックしても
-// Close や Running を妨げない。Close されると書き込みはエラーになる。
+// Write は H.264 フレームデータをプレイヤーへ送る（io.Writer）
 func (p *VideoPlayer) Write(frameData []byte) (int, error) {
 	p.mu.Lock()
 	stdin := p.stdin

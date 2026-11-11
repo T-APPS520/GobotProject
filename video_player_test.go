@@ -2,7 +2,9 @@ package main
 
 import (
 	"errors"
+	"os"
 	"os/exec"
+	"path/filepath"
 	"strings"
 	"testing"
 	"time"
@@ -298,4 +300,101 @@ func TestCameraViewerDisplayWithoutPlayer(t *testing.T) {
 	}
 
 	cameraViewer.Stop()
+}
+
+// TestDetectPlayerFoundCoverage プレイヤーが見つかる分岐（偽ffplayをPATHに置く）
+func TestDetectPlayerFoundCoverage(t *testing.T) {
+	dir := t.TempDir()
+	script := "#!/bin/sh\nexec cat\n"
+	ffplayPath := filepath.Join(dir, "ffplay")
+	if err := os.WriteFile(ffplayPath, []byte(script), 0o755); err != nil {
+		t.Fatalf("偽プレイヤーの作成に失敗: %v", err)
+	}
+	t.Setenv("PATH", dir+string(os.PathListSeparator)+os.Getenv("PATH"))
+
+	spec, ok := detectPlayer()
+	if !ok {
+		t.Fatal("偽ffplayが検出されなかった")
+	}
+	if spec.name != "ffplay" {
+		t.Errorf("検出されたプレイヤーが不正: %s", spec.name)
+	}
+
+	player, err := NewVideoPlayer()
+	if err != nil {
+		t.Fatalf("NewVideoPlayer に失敗: %v", err)
+	}
+	if player.Name() != "ffplay" {
+		t.Errorf("プレイヤー名が不正: %s", player.Name())
+	}
+
+	// 検出されたプレイヤーでのライフサイクル
+	if err := player.Start(); err != nil {
+		t.Fatalf("起動に失敗: %v", err)
+	}
+	if !player.Running() {
+		t.Error("起動後は Running であるべき")
+	}
+	if _, err := player.Write([]byte{0x00, 0x00, 0x00, 0x01}); err != nil {
+		t.Errorf("書き込みに失敗: %v", err)
+	}
+	if err := player.Close(); err != nil {
+		t.Errorf("終了に失敗: %v", err)
+	}
+}
+
+// TestVideoPlayerRunningStatesCoverage Running の各状態
+func TestVideoPlayerRunningStatesCoverage(t *testing.T) {
+	player := newVideoPlayer(catSpec(t))
+
+	// 未起動（exited が nil）
+	if player.Running() {
+		t.Error("未起動では Running であってはならない")
+	}
+
+	if err := player.Start(); err != nil {
+		t.Fatalf("起動に失敗: %v", err)
+	}
+	if !player.Running() {
+		t.Error("起動後は Running であるべき")
+	}
+
+	if err := player.Close(); err != nil {
+		t.Fatalf("終了に失敗: %v", err)
+	}
+	if player.Running() {
+		t.Error("終了後は Running であってはならない")
+	}
+}
+
+// TestDetectPlayerNotFoundCoverage プレイヤーが1つも無い環境の分岐
+func TestDetectPlayerNotFoundCoverage(t *testing.T) {
+	// PATH を空にして候補が見つからない状態にする
+	t.Setenv("PATH", t.TempDir())
+
+	if _, ok := detectPlayer(); ok {
+		t.Error("プレイヤーが無いのに検出された")
+	}
+	if _, err := NewVideoPlayer(); err == nil {
+		t.Error("プレイヤーが無いのに NewVideoPlayer が成功した")
+	}
+}
+
+// TestVideoPlayerRunningAfterNaturalExitCoverage プロセスが自然終了した後の Running
+func TestVideoPlayerRunningAfterNaturalExitCoverage(t *testing.T) {
+	// "true" コマンドは即座に終了する
+	player := newVideoPlayer(playerSpec{name: "true"})
+	if err := player.Start(); err != nil {
+		t.Fatalf("起動に失敗: %v", err)
+	}
+
+	
+	waitForCondition(t, 2*time.Second, func() bool {
+		return !player.Running()
+	}, "自然終了後に Running が false にならない")
+
+	// 終了後の Close も正常に終わる
+	if err := player.Close(); err != nil {
+		t.Errorf("自然終了後の Close でエラー: %v", err)
+	}
 }

@@ -4,6 +4,7 @@ import (
 	"fmt"
 	"os"
 	"path/filepath"
+	"runtime"
 	"strings"
 	"testing"
 	"time"
@@ -431,4 +432,386 @@ func getTestRecordingFiles(t *testing.T) []string {
 	}
 
 	return files
+}
+
+// TestCameraViewerStartStopCoverage Start と Stop を検証する
+func TestCameraViewerStartStopCoverage(t *testing.T) {
+	chdirTo(t, t.TempDir())
+
+	drone := tello.NewDriver("8895")
+	cv := NewCameraViewer(drone)
+
+	recoverCall(cv.Start)
+
+	cv.Stop()
+	if cv.IsRunning() {
+		t.Error("Stop 後は実行中であってはならない")
+	}
+
+	cv.StartRecording()
+	if !cv.IsRecording() {
+		t.Fatal("録画が開始していない")
+	}
+	cv.Stop()
+	if cv.IsRecording() {
+		t.Error("Stop 後は録画停止であるべき")
+	}
+}
+
+// TestProcessFrameBranchesCoverage フレーム処理の各分岐
+func TestProcessFrameBranchesCoverage(t *testing.T) {
+	chdirTo(t, t.TempDir())
+
+	drone := tello.NewDriver("8897")
+	cv := NewCameraViewer(drone)
+	cv.playerFactory = func() (*VideoPlayer, error) {
+		return nil, os.ErrNotExist // 表示できない環境
+	}
+	cv.isRunning = true
+
+	// 150フレーム処理する
+	frame := []byte{0x00, 0x00, 0x00, 0x01, 0x65}
+	for i := 0; i < 150; i++ {
+		cv.processFrame(frame)
+	}
+	if cv.frameCount != 150 {
+		t.Errorf("フレーム数が不正: %d", cv.frameCount)
+	}
+
+	// 録画中のフレーム書き込み経路
+	cv.StartRecording()
+	cv.processFrame(frame)
+	cv.StopRecording()
+
+	// 停止中のフレームは無視される
+	cv.isRunning = false
+	cv.processFrame(frame)
+	if cv.frameCount != 151 {
+		t.Errorf("停止中のフレームが数えられている: %d", cv.frameCount)
+	}
+}
+
+// TestStartRecordingErrorCoverage 録画ファイルを作成できない場合を検証する
+func TestStartRecordingErrorCoverage(t *testing.T) {
+	if runtime.GOOS == "windows" {
+		t.Skip("Windows ではカレントディレクトリを削除できない")
+	}
+
+	saved, err := os.Getwd()
+	if err != nil {
+		t.Fatalf("カレントディレクトリ取得に失敗: %v", err)
+	}
+	defer os.Chdir(saved)
+
+	tmp := t.TempDir()
+	if err := os.Chdir(tmp); err != nil {
+		t.Fatalf("ディレクトリ移動に失敗: %v", err)
+	}
+	if err := os.RemoveAll(tmp); err != nil {
+		t.Fatalf("ディレクトリ削除に失敗: %v", err)
+	}
+
+	cv := NewCameraViewer(tello.NewDriver("8901"))
+	cv.StartRecording()
+	if cv.IsRecording() {
+		t.Error("ファイル作成に失敗したのに録画中になっている")
+	}
+}
+
+// TestMP4WriterCoverage MP4ライターを検証する
+func TestMP4WriterCoverage(t *testing.T) {
+	dir := t.TempDir()
+	path := filepath.Join(dir, "test.mov")
+
+	w, err := NewMP4Writer(path)
+	if err != nil {
+		t.Fatalf("ライター作成に失敗: %v", err)
+	}
+
+	if err := w.WriteFrame(nil); err != nil {
+		t.Errorf("空フレーム書き込みでエラー: %v", err)
+	}
+	if err := w.WriteFrame([]byte{0x00, 0x00, 0x00, 0x01, 0x67}); err != nil {
+		t.Errorf("フレーム書き込みでエラー: %v", err)
+	}
+	if w.frameNum != 1 {
+		t.Errorf("フレーム数が不正: %d", w.frameNum)
+	}
+
+	if err := w.Close(); err != nil {
+		t.Errorf("クローズでエラー: %v", err)
+	}
+	if err := w.Close(); err != nil {
+		t.Errorf("二重クローズでエラー: %v", err)
+	}
+
+	if _, err := NewMP4Writer(filepath.Join(dir, "no-such-dir", "x.mov")); err == nil {
+		t.Error("存在しないディレクトリではエラーになるべき")
+	}
+
+	if _, err := os.Stat("/dev/full"); err == nil {
+		wf, err := NewMP4Writer("/dev/full")
+		if err != nil {
+			t.Skipf("/dev/full を開けなかった: %v", err)
+		}
+		if err := wf.Close(); err == nil {
+			t.Error("/dev/full ではクローズがエラーになるべき")
+		}
+	}
+}
+
+// TestStopRecordingCloseErrorCoverage 録画ファイルの保存に失敗する場合を検証する
+func TestStopRecordingCloseErrorCoverage(t *testing.T) {
+	chdirTo(t, t.TempDir())
+
+	cv := NewCameraViewer(tello.NewDriver("8902"))
+	cv.StartRecording()
+	if !cv.IsRecording() {
+		t.Fatal("録画が開始していない")
+	}
+
+	if cv.mp4Writer != nil && cv.mp4Writer.file != nil {
+		cv.mp4Writer.file.Close()
+	}
+	cv.StopRecording()
+	if cv.IsRecording() {
+		t.Error("停止後は録画中であってはならない")
+	}
+}
+
+// TestMP4BoxBuildersCoverage MP4ボックス生成を検証する
+func TestMP4BoxBuildersCoverage(t *testing.T) {
+	dir := t.TempDir()
+	f, err := os.Create(filepath.Join(dir, "boxes.mov"))
+	if err != nil {
+		t.Fatalf("ファイル作成に失敗: %v", err)
+	}
+	defer f.Close()
+
+	w := &MP4Writer{
+		file:      f,
+		startTime: time.Now().Add(-10 * time.Second),
+		frameNum:  5,
+		frameData: [][]byte{{0x01, 0x02}},
+	}
+
+	if len(w.createQuickTimeMovieBox()) == 0 {
+		t.Error("moovボックスが空")
+	}
+	wFresh := &MP4Writer{
+		file:      f,
+		startTime: time.Now(),
+		frameNum:  7,
+	}
+	if len(wFresh.createQuickTimeMovieBox()) == 0 {
+		t.Error("moovボックスが空（duration 0）")
+	}
+	if len(w.createQuickTimeMovieHeaderBox(100)) == 0 {
+		t.Error("mvhdボックスが空")
+	}
+	if len(w.createQuickTimeVideoTrackBox(100)) == 0 {
+		t.Error("trakボックスが空")
+	}
+	if len(w.createTrackHeaderBox(100)) == 0 {
+		t.Error("tkhdボックスが空")
+	}
+	if len(w.createMediaBox(100)) == 0 {
+		t.Error("mdiaボックスが空")
+	}
+	if len(w.createMediaHeaderBox(100)) == 0 {
+		t.Error("mdhdボックスが空")
+	}
+	if len(w.createHandlerBox()) == 0 {
+		t.Error("hdlrボックスが空")
+	}
+	if len(w.createMediaInfoBox()) == 0 {
+		t.Error("minfボックスが空")
+	}
+	if len(w.createSimpleMovieBox()) == 0 {
+		t.Error("簡易moovボックスが空")
+	}
+	if err := w.createQuickTimeCompatibleMP4(); err != nil {
+		t.Errorf("QuickTime互換MP4の作成でエラー: %v", err)
+	}
+	if err := w.createMinimalQuickTimeMP4(); err != nil {
+		t.Errorf("最小MP4の作成でエラー: %v", err)
+	}
+}
+
+// waitForCondition は条件が満たされるまで待つ（非同期イベント処理用）
+func waitForCondition(t *testing.T, timeout time.Duration, cond func() bool, msg string) {
+	t.Helper()
+	deadline := time.Now().Add(timeout)
+	for time.Now().Before(deadline) {
+		if cond() {
+			return
+		}
+		time.Sleep(20 * time.Millisecond)
+	}
+	t.Fatalf("タイムアウト: %s", msg)
+}
+
+// errWriteCloser は書き込みが必ず失敗する io.WriteCloser（テスト用）
+type errWriteCloser struct{}
+
+func (errWriteCloser) Write(p []byte) (int, error) { return 0, os.ErrClosed }
+
+func (errWriteCloser) Close() error                { return nil }
+
+// TestCameraViewerStartStopWithEventsCoverage Start→イベント受信→Stop の流れ
+func TestCameraViewerStartStopWithEventsCoverage(t *testing.T) {
+	drone := tello.NewDriver("8895")
+	cv := NewCameraViewer(drone)
+	cv.playerFactory = func() (*VideoPlayer, error) {
+		return newVideoPlayer(catSpec(t)), nil
+	}
+
+	cv.Start()
+	if !cv.IsRunning() {
+		t.Fatal("Start 後は実行中であるべき")
+	}
+
+	// 接続完了イベント
+	drone.Publish(drone.Event(tello.ConnectedEvent), nil)
+
+	// フレームイベント
+	drone.Publish(drone.Event(tello.VideoFrameEvent), []byte{0x00, 0x00, 0x00, 0x01, 0x67})
+	waitForCondition(t, 2*time.Second, func() bool {
+		return cv.GetDisplayedFrameCount() >= 1
+	}, "フレームイベントが表示まで届かなかった")
+
+	cv.Stop()
+	if cv.IsRunning() {
+		t.Error("Stop 後は実行中であってはならない")
+	}
+	
+	time.Sleep(200 * time.Millisecond)
+}
+
+// TestStreamStartLoopRetryCoverage 初回フレーム未着のまま再送タイマーが発火する経路
+func TestStreamStartLoopRetryCoverage(t *testing.T) {
+	drone := tello.NewDriver("8896")
+	cv := NewCameraViewer(drone)
+
+	cv.Start()
+	// 再送タイマー（3秒）が少なくとも1回発火するまで待つ
+	time.Sleep(3400 * time.Millisecond)
+	cv.Stop()
+	time.Sleep(200 * time.Millisecond)
+}
+
+// TestDiscardPlayerCoverage 書き込み失敗時のプレイヤー破棄
+func TestDiscardPlayerCoverage(t *testing.T) {
+	drone := tello.NewDriver("8898")
+	cv := NewCameraViewer(drone)
+	cv.isRunning = true
+
+	// 書き込みが必ず失敗するプレイヤーを差し込む
+	failing := &VideoPlayer{
+		spec:   playerSpec{name: "fake"},
+		stdin:  errWriteCloser{},
+		exited: make(chan struct{}), // Running() は true
+	}
+	cv.player = failing
+	cv.displayFrame([]byte{0x00, 0x00, 0x00, 0x01, 0x65})
+
+	if cv.player != nil {
+		t.Error("書き込み失敗したプレイヤーは破棄されるべき")
+	}
+	if cv.GetDisplayedFrameCount() != 0 {
+		t.Error("失敗したフレームが表示扱いになっている")
+	}
+
+	// 別のプレイヤーを discardPlayer に渡しても現在のものは破棄されない
+	good := newVideoPlayer(catSpec(t))
+	if err := good.Start(); err != nil {
+		t.Fatalf("プレイヤー起動に失敗: %v", err)
+	}
+	cv.player = good
+	cv.discardPlayer(failing)
+	if cv.player != good {
+		t.Error("無関係なプレイヤーの破棄で現在のプレイヤーが消えた")
+	}
+	cv.Stop()
+}
+
+// TestEnsurePlayerDeadAndStartErrorCoverage 終了済みプレイヤーの作り直しと起動失敗
+func TestEnsurePlayerDeadAndStartErrorCoverage(t *testing.T) {
+	drone := tello.NewDriver("8899")
+	cv := NewCameraViewer(drone)
+	cv.isRunning = true
+
+	// 終了済みプレイヤーが残っている場合
+	dead := newVideoPlayer(catSpec(t))
+	if err := dead.Start(); err != nil {
+		t.Fatalf("プレイヤー起動に失敗: %v", err)
+	}
+	dead.Close()
+	cv.player = dead
+	cv.displayFrame([]byte{0x00, 0x00, 0x00, 0x01, 0x65})
+	if cv.player != nil {
+		t.Error("終了済みプレイヤーは破棄されるべき")
+	}
+
+	// 起動に失敗するプレイヤーが返る場合
+	cv.playerRetryAt = time.Time{}
+	cv.playerFactory = func() (*VideoPlayer, error) {
+		return newVideoPlayer(playerSpec{name: "gobot-nonexistent-player-xyz"}), nil
+	}
+	cv.displayFrame([]byte{0x00, 0x00, 0x00, 0x01, 0x65})
+	if cv.player != nil {
+		t.Error("起動失敗したプレイヤーが残っている")
+	}
+	if cv.GetDisplayedFrameCount() != 0 {
+		t.Error("表示できていないのにフレーム数が増えている")
+	}
+}
+
+// TestStopWhileRecordingCoverage 録画中の Stop で録画も止まる
+func TestStopWhileRecordingCoverage(t *testing.T) {
+	chdirTo(t, t.TempDir())
+
+	drone := tello.NewDriver("8900")
+	cv := NewCameraViewer(drone)
+	cv.StartRecording()
+	if !cv.IsRecording() {
+		t.Fatal("録画が開始していない")
+	}
+	cv.Stop()
+	if cv.IsRecording() {
+		t.Error("Stop 後は録画停止であるべき")
+	}
+}
+
+// TestDisplayFrameEmptyCoverage 空フレームは表示されない
+func TestDisplayFrameEmptyCoverage(t *testing.T) {
+	cv := NewCameraViewer(tello.NewDriver("8903"))
+	cv.isRunning = true
+	cv.displayFrame(nil)
+	cv.displayFrame([]byte{})
+	if cv.GetDisplayedFrameCount() != 0 {
+		t.Error("空フレームが表示扱いになっている")
+	}
+}
+
+// TestStreamStartLoopExitsOnFirstFrameCoverage
+// 初回フレーム到達後、再送タイマーの発火でループが自律終了する経路
+func TestStreamStartLoopExitsOnFirstFrameCoverage(t *testing.T) {
+	drone := tello.NewDriver("8904")
+	cv := NewCameraViewer(drone)
+	cv.playerFactory = func() (*VideoPlayer, error) {
+		return newVideoPlayer(catSpec(t)), nil
+	}
+
+	cv.Start()
+	drone.Publish(drone.Event(tello.VideoFrameEvent), []byte{0x00, 0x00, 0x00, 0x01, 0x67})
+	waitForCondition(t, 2*time.Second, func() bool {
+		return cv.GetDisplayedFrameCount() >= 1
+	}, "フレームが表示されなかった")
+
+	// 次の再送タイマー（3秒周期）でループが終了するまで待つ
+	time.Sleep(3400 * time.Millisecond)
+
+	cv.Stop()
+	time.Sleep(100 * time.Millisecond)
 }

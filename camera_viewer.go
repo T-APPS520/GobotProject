@@ -72,9 +72,6 @@ func (cv *CameraViewer) Start() {
 }
 
 // requestVideoStream はドローンへビデオストリーム開始を要求する
-//
-// ドライバー未接続時はドライバー内部でパニックする場合があるため、
-// ここで回復する。再送ループ側で接続後に改めて要求される。
 func (cv *CameraViewer) requestVideoStream() {
 	defer func() {
 		if r := recover(); r != nil {
@@ -88,9 +85,6 @@ func (cv *CameraViewer) requestVideoStream() {
 }
 
 // streamStartLoop は初回フレームが届くまでビデオ開始要求を再送する
-//
-// 開始要求はUDPのため、接続直後の1回だけでは取りこぼす可能性がある。
-// フレームが届き始めたら再送を止める。
 func (cv *CameraViewer) streamStartLoop() {
 	cv.requestVideoStream()
 
@@ -112,9 +106,7 @@ func (cv *CameraViewer) streamStartLoop() {
 
 // Stop はカメラビューワーを停止
 func (cv *CameraViewer) Stop() {
-	// 実行状態の変更とプレイヤー破棄を playerMu の中でまとめて行う。
-	// 処理途中のフレームがこの後にプレイヤーを作り直せないようにするため
-	// （ensurePlayer は同じロックの中で実行状態を確認する）
+	// 実行状態の変更とプレイヤー破棄を playerMu の中でまとめて行う
 	cv.playerMu.Lock()
 	cv.isRunning = false
 	player := cv.player
@@ -164,10 +156,6 @@ func (cv *CameraViewer) processFrame(frameData []byte) {
 }
 
 // displayFrame は受信フレームを外部プレイヤーへ送り、PC画面に表示する
-//
-// プレイヤーは初回フレーム到着時に起動する（映像が来る前に空の
-// ウィンドウを開かない）。プレイヤーが無い環境では警告を一度だけ出し、
-// フレーム受信自体は継続する。
 func (cv *CameraViewer) displayFrame(frameData []byte) {
 	if len(frameData) == 0 {
 		return
@@ -178,9 +166,7 @@ func (cv *CameraViewer) displayFrame(frameData []byte) {
 		return
 	}
 
-	// パイプへの書き込みは playerMu を保持せずに行う。
-	// プレイヤーが応答しなくなって書き込みが止まっても、Stop から
-	// プレイヤーを終了して書き込みを解き放てるようにするため
+	// パイプへの書き込みは playerMu を保持せずに行う
 	if _, err := player.Write(frameData); err != nil {
 		log.Printf("映像プレイヤーへの書き込みに失敗したため破棄します: %v", err)
 		cv.discardPlayer(player)
@@ -193,11 +179,6 @@ func (cv *CameraViewer) displayFrame(frameData []byte) {
 }
 
 // ensurePlayer は表示用プレイヤーを用意する（無ければ起動する）
-//
-// 実行状態の確認とプレイヤー生成は playerMu の中でまとめて行う。
-// Stop も同じロックの中で実行状態を落としてプレイヤーを破棄するため、
-// 停止処理と競合したフレームがプレイヤーを作り直すことはない。
-// 用意できなかった場合（停止済み・リトライ抑制中・プレイヤー無し）は nil を返す。
 func (cv *CameraViewer) ensurePlayer() *VideoPlayer {
 	cv.playerMu.Lock()
 	defer cv.playerMu.Unlock()
@@ -242,7 +223,6 @@ func (cv *CameraViewer) ensurePlayer() *VideoPlayer {
 }
 
 // discardPlayer は書き込みに失敗したプレイヤーを破棄する
-// （既に別のプレイヤーへ差し替わっていた場合は、現在のものには触れない）
 func (cv *CameraViewer) discardPlayer(player *VideoPlayer) {
 	cv.playerMu.Lock()
 	if cv.player == player {

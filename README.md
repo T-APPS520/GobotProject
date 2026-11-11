@@ -25,7 +25,8 @@
 - `main_test.go` - メインプログラムの統合テスト
 - `keyboard_handler_test.go` - キーボードハンドラーの単体テスト
 - `keyboard_handler_coverage_test.go` - キーボードハンドラーのカバレッジ強化テスト
-- `coverage_full_test.go` - カバレッジ100%（到達可能範囲）を目指す追加テスト集
+- `main_coverage_test.go` - 共通ヘルパーと main のカバレッジテスト
+- `drone_controller_test.go` - ドローンコントローラーのカバレッジテスト
 - `camera_viewer_test.go` - カメラビューワーのテスト
 - `video_player_test.go` - 映像表示プレイヤーのテスト
 
@@ -129,6 +130,7 @@ go get github.com/nsf/termbox-go
 ### 映像表示に必要なプレイヤー
 
 カメラ映像の表示には、以下のいずれかのプレイヤーが必要です（自動検出されます）。
+映像表示は Windows / macOS / Linux に対応しています（PATH 上のプレイヤーを自動検出するため、OS 固有の処理はありません）。
 
 - **ffplay**（ffmpegに同梱）: Windows `winget install ffmpeg` / macOS `brew install ffmpeg` / Linux `sudo apt install ffmpeg`
 - **mpv**
