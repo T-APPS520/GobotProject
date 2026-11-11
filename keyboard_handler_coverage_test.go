@@ -1,10 +1,15 @@
 package main
 
 import (
+	"context"
 	"fmt"
+	"os"
+	"os/exec"
+	"reflect"
+	"runtime"
 	"testing"
 	"time"
-	"reflect"
+
 	"github.com/nsf/termbox-go"
 )
 
@@ -488,4 +493,190 @@ func TestCoverageComprehensive(t *testing.T) {
 		
 		t.Log("包括的統合テストが完了")
 	})
+}
+
+// TestProcessKeyAllKeysCoverage 全キー入力を実行する
+func TestProcessKeyAllKeysCoverage(t *testing.T) {
+	dc := NewDroneController()
+	cv := NewCameraViewer(dc.GetDriver())
+	kh := NewKeyboardHandler(dc, cv)
+	kh.SetShutdownCallback(func() {})
+
+	key := func(ev termbox.Event) {
+		recoverCall(func() { kh.processKey(ev) })
+	}
+
+	key(termbox.Event{Type: termbox.EventKey, Key: termbox.KeyEsc})
+
+	key(termbox.Event{Type: termbox.EventKey, Key: termbox.KeySpace})
+	dc.isFlying = true
+	key(termbox.Event{Type: termbox.EventKey, Key: termbox.KeySpace})
+
+	for _, ch := range []rune{'w', 'W', 'a', 'A', 's', 'S', 'd', 'D', 'z', 'Z'} {
+		key(termbox.Event{Type: termbox.EventKey, Ch: ch})
+	}
+	dc.isFlying = false
+	for _, ch := range []rune{'w', 'a', 's', 'd', 'z'} {
+		key(termbox.Event{Type: termbox.EventKey, Ch: ch})
+	}
+
+	key(termbox.Event{Type: termbox.EventKey, Ch: 'l'})
+	if cv.IsRecording() {
+		recFile := cv.GetCurrentRecordingFile()
+		key(termbox.Event{Type: termbox.EventKey, Ch: 'L'})
+		os.Remove(recFile)
+	}
+
+	key(termbox.Event{Type: termbox.EventKey, Ch: 'x'})
+	key(termbox.Event{Type: termbox.EventKey, Key: termbox.KeyF1})
+	key(termbox.Event{Type: termbox.EventKey})
+
+	key(termbox.Event{Type: termbox.EventKey, Ch: 'q'})
+	key(termbox.Event{Type: termbox.EventKey, Key: termbox.KeyCtrlC})
+}
+
+// TestProcessKeyNilViewerCoverage ビューワーが nil の場合を検証する
+func TestProcessKeyNilViewerCoverage(t *testing.T) {
+	kh := NewKeyboardHandler(NewDroneController(), nil)
+	kh.SetShutdownCallback(func() {})
+
+	kh.processKey(termbox.Event{Type: termbox.EventKey, Ch: 'l'})
+}
+
+// TestProcessKeyNonControlAndJapaneseCoverage 操作キー以外のキーと日本語入力では何もしないことを検証する
+func TestProcessKeyNonControlAndJapaneseCoverage(t *testing.T) {
+	dc := NewDroneController()
+	cv := NewCameraViewer(dc.GetDriver())
+	kh := NewKeyboardHandler(dc, cv)
+	shutdown := false
+	kh.SetShutdownCallback(func() { shutdown = true })
+
+	keys := []termbox.Key{
+		termbox.KeyEnter, termbox.KeyTab,
+		termbox.KeyBackspace, termbox.KeyBackspace2,
+		termbox.KeyDelete, termbox.KeyInsert,
+		termbox.KeyHome, termbox.KeyEnd,
+		termbox.KeyPgup, termbox.KeyPgdn,
+		termbox.KeyArrowUp, termbox.KeyArrowDown,
+		termbox.KeyArrowLeft, termbox.KeyArrowRight,
+		termbox.KeyF2, termbox.KeyF12, termbox.KeyCtrlA,
+	}
+	for _, k := range keys {
+		kh.processKey(termbox.Event{Type: termbox.EventKey, Key: k})
+	}
+
+	runes := []rune{
+		'1', '9', '0', 'e', 'r', 'f', 'g', 'h', 'j', 'k', 'y', 'u', '-', '@', ';',
+		'あ', 'わ', 'さ', 'だ', 'り', 'ﾜ',
+		'ｗ', 'Ｗ', 'ｌ', 'Ｌ', 'ｑ', '　',
+	}
+	for _, ch := range runes {
+		kh.processKey(termbox.Event{Type: termbox.EventKey, Ch: ch})
+	}
+
+	if shutdown {
+		t.Error("操作キー以外で終了処理が動いた")
+	}
+	if dc.IsFlying() {
+		t.Error("操作キー以外で飛行状態が変わった")
+	}
+	if cv.IsRecording() {
+		t.Error("操作キー以外で録画が始まった")
+	}
+}
+
+// TestGracefulShutdownCompletesCoverage 終了処理の完走を検証する
+func TestGracefulShutdownCompletesCoverage(t *testing.T) {
+	cv := NewCameraViewer(NewDroneController().GetDriver())
+	kh := NewKeyboardHandler(nil, cv)
+	called := false
+	kh.SetShutdownCallback(func() { called = true })
+
+	kh.gracefulShutdown()
+	if !called {
+		t.Error("シャットダウンコールバックが呼ばれていない")
+	}
+
+	kh2 := NewKeyboardHandler(nil, nil)
+	called2 := false
+	kh2.SetShutdownCallback(func() { called2 = true })
+	kh2.gracefulShutdown()
+	if !called2 {
+		t.Error("シャットダウンコールバックが呼ばれていない（nil構成）")
+	}
+}
+
+// TestSetupSignalHandlingCoverage シグナル受信で終了処理が動くことを検証する
+func TestSetupSignalHandlingCoverage(t *testing.T) {
+	if runtime.GOOS == "windows" {
+		t.Skip("Windows では os.Interrupt の自己送信がサポートされない")
+	}
+
+	if os.Getenv("GOBOT_SIGNAL_TEST_CHILD") == "1" {
+		kh := NewKeyboardHandler(nil, nil)
+		done := make(chan struct{})
+		kh.SetShutdownCallback(func() { close(done) })
+
+		kh.setupSignalHandling()
+
+		proc, err := os.FindProcess(os.Getpid())
+		if err != nil {
+			t.Fatalf("自プロセスの取得に失敗: %v", err)
+		}
+		if err := proc.Signal(os.Interrupt); err != nil {
+			t.Fatalf("シグナル送信に失敗: %v", err)
+		}
+
+		select {
+		case <-done:
+		case <-time.After(3 * time.Second):
+			t.Fatal("シグナルで終了処理が動かなかった")
+		}
+		return
+	}
+
+	kh := NewKeyboardHandler(nil, nil)
+	kh.SetShutdownCallback(func() {})
+	kh.setupSignalHandling()
+
+	ctx, cancel := context.WithTimeout(context.Background(), 30*time.Second)
+	defer cancel()
+	cmd := exec.CommandContext(ctx, os.Args[0],
+		"-test.run", "^TestSetupSignalHandlingCoverage$", "-test.v")
+	cmd.Env = append(os.Environ(), "GOBOT_SIGNAL_TEST_CHILD=1")
+	out, err := cmd.CombinedOutput()
+	if err != nil {
+		t.Fatalf("子プロセスでのシグナル検証に失敗: %v\n%s", err, out)
+	}
+}
+
+// TestKeyboardHandlerStartErrorCoverage Start の成否を検証する
+func TestKeyboardHandlerStartErrorCoverage(t *testing.T) {
+	kh := NewKeyboardHandler(NewDroneController(), nil)
+	err := kh.Start()
+	if err == nil {
+		if !kh.IsRunning() {
+			t.Error("Start 成功後は実行中であるべき")
+		}
+		kh.Stop()
+		return
+	}
+	if kh.IsRunning() {
+		t.Error("Start 失敗後は実行中であってはならない")
+	}
+}
+
+// TestHandleKeyboardNotRunningCoverage 停止中は即座に返ることを検証する
+func TestHandleKeyboardNotRunningCoverage(t *testing.T) {
+	kh := NewKeyboardHandler(NewDroneController(), nil)
+	done := make(chan struct{})
+	go func() {
+		kh.handleKeyboard()
+		close(done)
+	}()
+	select {
+	case <-done:
+	case <-time.After(2 * time.Second):
+		t.Fatal("停止中の handleKeyboard が返ってこない")
+	}
 }
