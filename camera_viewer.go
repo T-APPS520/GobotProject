@@ -6,6 +6,7 @@ import (
 	"log"
 	"os"
 	"sync"
+	"sync/atomic"
 	"time"
 
 	"gobot.io/x/gobot/platforms/dji/tello"
@@ -20,45 +21,111 @@ type CameraViewer struct {
 	mp4Writer      *MP4Writer
 	currentRecordingFile string
 	recordingMutex sync.Mutex
+
+	// 映像表示（外部プレイヤー）用
+	player          *VideoPlayer
+	playerMu        sync.Mutex
+	playerFactory   func() (*VideoPlayer, error)
+	playerRetryAt   time.Time // プレイヤー起動を次に試してよい時刻（失敗時の連続リトライ抑制）
+	playerWarned    bool      // プレイヤー未検出の警告を出したかどうか
+	displayedFrames int       // プレイヤーへ送ったフレーム数
+
+	// ビデオストリーム開始リクエストの再送制御用
+	gotFirstFrame  atomic.Bool
+	streamStopCh   chan struct{}
+	streamStopOnce sync.Once
 }
 
 // NewCameraViewer は新しいカメラビューワーを作成
 func NewCameraViewer(drone *tello.Driver) *CameraViewer {
 	return &CameraViewer{
-		drone:       drone,
-		isRunning:   false,
-		isRecording: false,
-		frameCount:  0,
+		drone:         drone,
+		isRunning:     false,
+		isRecording:   false,
+		frameCount:    0,
+		playerFactory: NewVideoPlayer,
 	}
 }
 
 // Start はカメラビューワーを開始
 func (cv *CameraViewer) Start() {
 	cv.isRunning = true
-	
-	// ビデオストリームを開始
-	cv.drone.StartVideo()
-	cv.drone.SetVideoEncoderRate(tello.VideoBitRateAuto)
-	cv.drone.SetExposure(0)
+	cv.streamStopCh = make(chan struct{})
+	cv.streamStopOnce = sync.Once{}
 
-	// ビデオフレームイベントを登録
+	// ビデオフレームイベントを登録（ストリーム開始より先に登録し、取りこぼしを防ぐ）
 	cv.drone.On(tello.VideoFrameEvent, func(data interface{}) {
 		if frameData, ok := data.([]byte); ok {
 			cv.processFrame(frameData)
 		}
 	})
 
+	// ドローンとの接続が完了したタイミングでもビデオ開始を要求する
+	cv.drone.On(tello.ConnectedEvent, func(data interface{}) {
+		cv.requestVideoStream()
+	})
+
+	// ビデオストリーム開始を要求（初回フレームが届くまで定期的に再送する）
+	go cv.streamStartLoop()
+
 	fmt.Println("カメラビューワー開始 - ビデオストリーム受信中...")
+}
+
+// requestVideoStream はドローンへビデオストリーム開始を要求する
+//
+// ドライバー未接続時はドライバー内部でパニックする場合があるため、
+// ここで回復する。再送ループ側で接続後に改めて要求される。
+func (cv *CameraViewer) requestVideoStream() {
+	defer func() {
+		if r := recover(); r != nil {
+			log.Printf("ビデオストリーム開始要求に失敗（ドローン未接続の可能性）: %v", r)
+		}
+	}()
+
+	cv.drone.StartVideo()
+	cv.drone.SetVideoEncoderRate(tello.VideoBitRateAuto)
+	cv.drone.SetExposure(0)
+}
+
+// streamStartLoop は初回フレームが届くまでビデオ開始要求を再送する
+//
+// 開始要求はUDPのため、接続直後の1回だけでは取りこぼす可能性がある。
+// フレームが届き始めたら再送を止める。
+func (cv *CameraViewer) streamStartLoop() {
+	cv.requestVideoStream()
+
+	ticker := time.NewTicker(3 * time.Second)
+	defer ticker.Stop()
+
+	for {
+		select {
+		case <-cv.streamStopCh:
+			return
+		case <-ticker.C:
+			if cv.gotFirstFrame.Load() {
+				return
+			}
+			cv.requestVideoStream()
+		}
+	}
 }
 
 // Stop はカメラビューワーを停止
 func (cv *CameraViewer) Stop() {
 	cv.isRunning = false
-	
+
+	// ビデオ開始要求の再送ループを止める
+	if cv.streamStopCh != nil {
+		cv.streamStopOnce.Do(func() { close(cv.streamStopCh) })
+	}
+
+	// 映像表示プレイヤーを終了する
+	cv.closePlayer()
+
 	if cv.isRecording {
 		cv.StopRecording()
 	}
-	
+
 	fmt.Println("カメラビューワー停止")
 }
 
@@ -69,11 +136,15 @@ func (cv *CameraViewer) processFrame(frameData []byte) {
 	}
 
 	cv.frameCount++
-	
+	cv.gotFirstFrame.Store(true)
+
 	// フレーム受信の確認（5秒ごと）
 	if cv.frameCount%150 == 0 { // 約30FPS * 5秒
 		fmt.Printf("フレーム受信中... (フレーム数: %d)\n", cv.frameCount)
 	}
+
+	// 受信したフレームをPC画面に表示する
+	cv.displayFrame(frameData)
 
 	// 録画中の場合、フレームデータをMP4に直接書き込み
 	if cv.isRecording && cv.mp4Writer != nil {
@@ -81,6 +152,86 @@ func (cv *CameraViewer) processFrame(frameData []byte) {
 			log.Printf("フレーム書き込みエラー: %v", err)
 		}
 	}
+}
+
+// displayFrame は受信フレームを外部プレイヤーへ送り、PC画面に表示する
+//
+// プレイヤーは初回フレーム到着時に起動する（映像が来る前に空の
+// ウィンドウを開かない）。プレイヤーが無い環境では警告を一度だけ出し、
+// フレーム受信自体は継続する。
+func (cv *CameraViewer) displayFrame(frameData []byte) {
+	if len(frameData) == 0 {
+		return
+	}
+
+	cv.playerMu.Lock()
+	defer cv.playerMu.Unlock()
+
+	if cv.player == nil {
+		if time.Now().Before(cv.playerRetryAt) {
+			return // 起動失敗直後の連続リトライを抑える
+		}
+		player, err := cv.playerFactory()
+		if err != nil {
+			if !cv.playerWarned {
+				log.Printf("カメラ映像を表示できません: %v", err)
+				cv.playerWarned = true
+			}
+			cv.playerRetryAt = time.Now().Add(10 * time.Second)
+			return
+		}
+		if err := player.Start(); err != nil {
+			log.Printf("映像プレイヤーの起動に失敗: %v", err)
+			cv.playerRetryAt = time.Now().Add(5 * time.Second)
+			return
+		}
+		cv.player = player
+		log.Printf("カメラ映像を表示しています（プレイヤー: %s）", player.Name())
+	}
+
+	if !cv.player.Running() {
+		// プレイヤーが終了していたら作り直す
+		cv.player.Close()
+		cv.player = nil
+		cv.playerRetryAt = time.Now().Add(2 * time.Second)
+		return
+	}
+
+	if _, err := cv.player.Write(frameData); err != nil {
+		log.Printf("映像プレイヤーへの書き込みに失敗したため、次回フレームで再起動します: %v", err)
+		cv.player.Close()
+		cv.player = nil
+		cv.playerRetryAt = time.Now().Add(2 * time.Second)
+		return
+	}
+	cv.displayedFrames++
+}
+
+// closePlayer は映像表示プレイヤーを終了する
+func (cv *CameraViewer) closePlayer() {
+	cv.playerMu.Lock()
+	defer cv.playerMu.Unlock()
+
+	if cv.player != nil {
+		cv.player.Close()
+		cv.player = nil
+	}
+}
+
+// IsDisplaying はカメラ映像を画面表示中かどうかを返す
+func (cv *CameraViewer) IsDisplaying() bool {
+	cv.playerMu.Lock()
+	defer cv.playerMu.Unlock()
+
+	return cv.player != nil && cv.player.Running()
+}
+
+// GetDisplayedFrameCount は画面表示へ送ったフレーム数を返す
+func (cv *CameraViewer) GetDisplayedFrameCount() int {
+	cv.playerMu.Lock()
+	defer cv.playerMu.Unlock()
+
+	return cv.displayedFrames
 }
 
 // StartRecording は録画を開始（MP4形式で直接録画）

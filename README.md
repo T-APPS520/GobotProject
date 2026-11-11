@@ -5,6 +5,8 @@
 ## 機能
 
 - **ドローン制御**: キーボードでドローンの離陸、着陸、移動を制御
+- **カメラ映像表示**: Telloのカメラ映像（H.264ストリーム）をPCの画面にリアルタイム表示（ffplay / mpv / mplayer のいずれかが必要）
+- **録画**: Lキーでカメラ映像の録画 開始/停止
 
 ## プロジェクトについて
 
@@ -16,6 +18,7 @@
 - `main.go` - メインプログラム（エントリーポイント）
 - `drone_controller.go` - Telloドローンを制御するクラス
 - `camera_viewer.go` - カメラ画像を処理・表示するクラス
+- `video_player.go` - 受信したH.264ストリームを外部プレイヤー（ffplay等）へ渡して画面表示するクラス
 - `keyboard_handler.go` - キーボード入力を処理するクラス
 
 ### テストファイル
@@ -23,6 +26,7 @@
 - `keyboard_handler_test.go` - キーボードハンドラーの単体テスト
 - `keyboard_handler_coverage_test.go` - キーボードハンドラーのカバレッジ強化テスト
 - `camera_viewer_test.go` - カメラビューワーのテスト
+- `video_player_test.go` - 映像表示プレイヤーのテスト
 
 ### 設定・ビルドファイル
 - `go.mod` - Go モジュール定義
@@ -111,6 +115,16 @@ go get github.com/nsf/termbox-go
 - **gobot.io/x/gobot/platforms/dji/tello**: DJI Telloドローン用ドライバー
 - **github.com/nsf/termbox-go**: ターミナルベースのユーザーインターフェース
 
+### 映像表示に必要なプレイヤー
+
+カメラ映像の表示には、以下のいずれかのプレイヤーが必要です（自動検出されます）。
+
+- **ffplay**（ffmpegに同梱）: Windows `winget install ffmpeg` / macOS `brew install ffmpeg` / Linux `sudo apt install ffmpeg`
+- **mpv**
+- **mplayer**
+
+プレイヤーが無い環境でもドローン制御と録画は動作しますが、映像は表示されません（起動時に警告ログが出ます）。
+
 ## 開発情報
 
 ### プロジェクト特徴
@@ -149,6 +163,12 @@ main.go
 - TelloのWi-Fiネットワークに正しく接続されているか確認
 - ドローンが起動しているか確認
 - 他のTelloコントローラーアプリが起動していないか確認
+
+### カメラ映像が表示されない場合
+- ffplay / mpv / mplayer のいずれかがインストールされているか確認（無い場合は映像ウィンドウが開きません）
+- PCのファイアウォールでUDP 11111番ポート（映像受信用）がブロックされていないか確認
+- コンソールに「フレーム受信中...」と表示されるか確認（表示されない場合は映像ストリーム自体が届いていません）
+- 公式Telloアプリなど、他のアプリが映像ストリームを使用していないか確認
 
 ### キーボード操作が効かない場合
 - PCの入力が半角英字になっているか確認
